@@ -52,23 +52,21 @@ class ConcurrentTransferIT {
 
     @BeforeEach
     void setUp() {
-        transactionRepository.deleteAll();
-        ledgerAccountRepository.deleteAll();
-        accountRepository.deleteAll();
-        customerRepository.deleteAll();
-
         Customer customer = customerRepository.saveAndFlush(new Customer(
                 "Ana Silva", UUID.randomUUID().toString(), "ana." + UUID.randomUUID() + "@example.com"));
-        Account source = new Account(customer.getId(), "10006661");
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 7);
+
+        Account source = new Account(customer.getId(), "1" + suffix);
         source.deposit(new BigDecimal("100.00"));
         sourceId = accountRepository.saveAndFlush(source).getId();
-        Account secondSource = new Account(customer.getId(), "10006664");
+
+        Account secondSource = new Account(customer.getId(), "2" + suffix);
         secondSource.deposit(new BigDecimal("100.00"));
         secondSourceId = accountRepository.saveAndFlush(secondSource).getId();
-        firstDestinationId = accountRepository.saveAndFlush(new Account(customer.getId(), "10006662")).getId();
-        secondDestinationId = accountRepository.saveAndFlush(new Account(customer.getId(), "10006663")).getId();
 
-        ledgerAccountRepository.saveAndFlush(LedgerAccount.cashClearing());
+        firstDestinationId = accountRepository.saveAndFlush(new Account(customer.getId(), "3" + suffix)).getId();
+        secondDestinationId = accountRepository.saveAndFlush(new Account(customer.getId(), "4" + suffix)).getId();
+
         ledgerAccountRepository.saveAndFlush(LedgerAccount.customerLiability(sourceId));
         ledgerAccountRepository.saveAndFlush(LedgerAccount.customerLiability(secondSourceId));
         ledgerAccountRepository.saveAndFlush(LedgerAccount.customerLiability(firstDestinationId));
