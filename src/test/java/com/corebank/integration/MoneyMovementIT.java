@@ -1,5 +1,6 @@
 package com.corebank.integration;
 
+import com.corebank.account.application.AccountService;
 import com.corebank.account.domain.Account;
 import com.corebank.account.infrastructure.AccountRepository;
 import com.corebank.customer.domain.Customer;
@@ -30,6 +31,7 @@ class MoneyMovementIT {
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine");
 
     @Autowired TransactionService transactionService;
+    @Autowired AccountService accountService;
     @Autowired AccountTransactionRepository transactionRepository;
     @Autowired AccountRepository accountRepository;
     @Autowired CustomerRepository customerRepository;
@@ -37,9 +39,11 @@ class MoneyMovementIT {
 
     @BeforeEach
     void setUp() {
-        transactionRepository.deleteAll(); accountRepository.deleteAll(); customerRepository.deleteAll();
-        Customer customer = customerRepository.saveAndFlush(new Customer("Ana Silva", UUID.randomUUID().toString(), "ana." + UUID.randomUUID() + "@example.com"));
-        Account account = accountRepository.saveAndFlush(new Account(customer.getId(), "10008881"));
+        Customer customer = customerRepository.saveAndFlush(new Customer(
+                "Ana Silva",
+                UUID.randomUUID().toString(),
+                "ana." + UUID.randomUUID() + "@example.com"));
+        Account account = accountService.create(customer.getId());
         accountId = account.getId();
     }
 
@@ -51,7 +55,8 @@ class MoneyMovementIT {
     }
 
     @Test void withdrawal_shouldCommitBalanceAndExactlyOneHistoryRow() {
-        transactionService.deposit(accountId, new BigDecimal("100.00"), "seed"); transactionRepository.deleteAll();
+        transactionService.deposit(accountId, new BigDecimal("100.00"), "seed");
+        transactionRepository.deleteAll();
         transactionService.withdraw(accountId, new BigDecimal("30.00"), "ATM");
         Account reloaded = accountRepository.findById(accountId).orElseThrow();
         assertThat(reloaded.getBalance()).isEqualByComparingTo("70.00");
@@ -59,8 +64,10 @@ class MoneyMovementIT {
     }
 
     @Test void rejectedWithdrawal_shouldLeaveBalanceAndHistoryUnchanged() {
-        transactionService.deposit(accountId, new BigDecimal("20.00"), "seed"); transactionRepository.deleteAll();
-        assertThatThrownBy(() -> transactionService.withdraw(accountId, new BigDecimal("50.00"), null)).isInstanceOf(InsufficientBalanceException.class);
+        transactionService.deposit(accountId, new BigDecimal("20.00"), "seed");
+        transactionRepository.deleteAll();
+        assertThatThrownBy(() -> transactionService.withdraw(accountId, new BigDecimal("50.00"), null))
+                .isInstanceOf(InsufficientBalanceException.class);
         Account reloaded = accountRepository.findById(accountId).orElseThrow();
         assertThat(reloaded.getBalance()).isEqualByComparingTo("20.00");
         assertThat(transactionRepository.findByAccountIdOrderByCreatedAtDesc(accountId)).isEmpty();
@@ -68,7 +75,8 @@ class MoneyMovementIT {
 
     @Test void transactionInsertFailure_shouldRollbackBalanceChange() {
         String invalidDescription = "x".repeat(201);
-        assertThatThrownBy(() -> transactionService.deposit(accountId, new BigDecimal("100.00"), invalidDescription)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> transactionService.deposit(accountId, new BigDecimal("100.00"), invalidDescription))
+                .isInstanceOf(IllegalArgumentException.class);
         Account reloaded = accountRepository.findById(accountId).orElseThrow();
         assertThat(reloaded.getBalance()).isEqualByComparingTo("0.00");
         assertThat(transactionRepository.findByAccountIdOrderByCreatedAtDesc(accountId)).isEmpty();

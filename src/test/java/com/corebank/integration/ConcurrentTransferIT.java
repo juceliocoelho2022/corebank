@@ -4,6 +4,9 @@ import com.corebank.account.domain.Account;
 import com.corebank.account.infrastructure.AccountRepository;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.infrastructure.CustomerRepository;
+import com.corebank.ledger.domain.LedgerAccount;
+import com.corebank.ledger.infrastructure.JournalEntryRepository;
+import com.corebank.ledger.infrastructure.LedgerAccountRepository;
 import com.corebank.transaction.infrastructure.AccountTransactionRepository;
 import com.corebank.transfer.application.TransferService;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +42,8 @@ class ConcurrentTransferIT {
     @Autowired AccountRepository accountRepository;
     @Autowired CustomerRepository customerRepository;
     @Autowired AccountTransactionRepository transactionRepository;
+    @Autowired LedgerAccountRepository ledgerAccountRepository;
+    @Autowired JournalEntryRepository journalEntryRepository;
 
     private UUID sourceId;
     private UUID secondSourceId;
@@ -47,24 +52,30 @@ class ConcurrentTransferIT {
 
     @BeforeEach
     void setUp() {
-        transactionRepository.deleteAll();
-        accountRepository.deleteAll();
-        customerRepository.deleteAll();
-
         Customer customer = customerRepository.saveAndFlush(new Customer(
                 "Ana Silva", UUID.randomUUID().toString(), "ana." + UUID.randomUUID() + "@example.com"));
-        Account source = new Account(customer.getId(), "10006661");
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 7);
+
+        Account source = new Account(customer.getId(), "1" + suffix);
         source.deposit(new BigDecimal("100.00"));
         sourceId = accountRepository.saveAndFlush(source).getId();
-        Account secondSource = new Account(customer.getId(), "10006664");
+
+        Account secondSource = new Account(customer.getId(), "2" + suffix);
         secondSource.deposit(new BigDecimal("100.00"));
         secondSourceId = accountRepository.saveAndFlush(secondSource).getId();
-        firstDestinationId = accountRepository.saveAndFlush(new Account(customer.getId(), "10006662")).getId();
-        secondDestinationId = accountRepository.saveAndFlush(new Account(customer.getId(), "10006663")).getId();
+
+        firstDestinationId = accountRepository.saveAndFlush(new Account(customer.getId(), "3" + suffix)).getId();
+        secondDestinationId = accountRepository.saveAndFlush(new Account(customer.getId(), "4" + suffix)).getId();
+
+        ledgerAccountRepository.saveAndFlush(LedgerAccount.customerLiability(sourceId));
+        ledgerAccountRepository.saveAndFlush(LedgerAccount.customerLiability(secondSourceId));
+        ledgerAccountRepository.saveAndFlush(LedgerAccount.customerLiability(firstDestinationId));
+        ledgerAccountRepository.saveAndFlush(LedgerAccount.customerLiability(secondDestinationId));
     }
 
     @Test
     void concurrentTransfersFromSameSource_shouldNeverDoubleSpend() throws Exception {
+        long journalsBefore = journalEntryRepository.count();
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
 
@@ -83,10 +94,12 @@ class ConcurrentTransferIT {
                 .filter(tx -> tx.getType().name().equals("TRANSFER_OUT"))
                 .count();
         assertThat(sourceOut).isEqualTo(1);
+        assertThat(journalEntryRepository.count()).isEqualTo(journalsBefore + 1);
     }
 
     @Test
     void concurrentTransfersToSameDestination_shouldNeverLoseACredit() throws Exception {
+        long journalsBefore = journalEntryRepository.count();
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
 
@@ -108,6 +121,7 @@ class ConcurrentTransferIT {
                 .filter(tx -> tx.getType().name().equals("TRANSFER_IN"))
                 .count();
         assertThat(destinationIn).isEqualTo(successCount);
+        assertThat(journalEntryRepository.count()).isEqualTo(journalsBefore + successCount);
     }
 
     private Callable<String> transfer(CountDownLatch start, UUID destinationId) {

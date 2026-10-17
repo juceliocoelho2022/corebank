@@ -3,6 +3,7 @@ package com.corebank.transfer.application;
 import com.corebank.account.domain.Account;
 import com.corebank.account.domain.AccountStatus;
 import com.corebank.account.infrastructure.AccountRepository;
+import com.corebank.ledger.application.LedgerService;
 import com.corebank.shared.exception.InvalidAccountStateException;
 import com.corebank.shared.exception.ResourceNotFoundException;
 import com.corebank.transaction.domain.AccountTransaction;
@@ -21,10 +22,14 @@ public class TransferService {
 
     private final AccountRepository accountRepository;
     private final AccountTransactionRepository transactionRepository;
+    private final LedgerService ledgerService;
 
-    public TransferService(AccountRepository accountRepository, AccountTransactionRepository transactionRepository) {
+    public TransferService(AccountRepository accountRepository,
+                           AccountTransactionRepository transactionRepository,
+                           LedgerService ledgerService) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
+        this.ledgerService = ledgerService;
     }
 
     @Transactional
@@ -60,6 +65,13 @@ public class TransferService {
         transactionRepository.save(AccountTransaction.transfer(
                 destinationAccountId, TransactionType.TRANSFER_IN, normalizedAmount,
                 destinationBefore, destination.getBalance(), normalizedDescription, transferId, sourceAccountId));
+
+        ledgerService.postTransfer(
+                sourceAccountId,
+                destinationAccountId,
+                transferId,
+                normalizedAmount,
+                normalizedDescription);
 
         return new TransferResult(
                 transferId,

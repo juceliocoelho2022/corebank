@@ -1,9 +1,11 @@
 package com.corebank.integration;
 
+import com.corebank.account.application.AccountService;
 import com.corebank.account.domain.Account;
 import com.corebank.account.infrastructure.AccountRepository;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.infrastructure.CustomerRepository;
+import com.corebank.transaction.application.TransactionService;
 import com.corebank.transaction.domain.AccountTransaction;
 import com.corebank.transaction.domain.TransactionType;
 import com.corebank.transaction.infrastructure.AccountTransactionRepository;
@@ -38,6 +40,8 @@ class TransferIT {
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine");
 
     @Autowired TransferService transferService;
+    @Autowired TransactionService transactionService;
+    @Autowired AccountService accountService;
     @MockitoSpyBean AccountTransactionRepository transactionRepository;
     @Autowired AccountRepository accountRepository;
     @Autowired CustomerRepository customerRepository;
@@ -47,19 +51,18 @@ class TransferIT {
 
     @BeforeEach
     void setUp() {
-        transactionRepository.deleteAll();
-        accountRepository.deleteAll();
-        customerRepository.deleteAll();
-
         Customer sourceCustomer = customerRepository.saveAndFlush(new Customer(
                 "Ana Silva", UUID.randomUUID().toString(), "ana." + UUID.randomUUID() + "@example.com"));
         Customer destinationCustomer = customerRepository.saveAndFlush(new Customer(
                 "Bruno Souza", UUID.randomUUID().toString(), "bruno." + UUID.randomUUID() + "@example.com"));
 
-        Account source = new Account(sourceCustomer.getId(), "10007771");
-        source.deposit(new BigDecimal("100.00"));
-        sourceId = accountRepository.saveAndFlush(source).getId();
-        destinationId = accountRepository.saveAndFlush(new Account(destinationCustomer.getId(), "10007772")).getId();
+        Account source = accountService.create(sourceCustomer.getId());
+        Account destination = accountService.create(destinationCustomer.getId());
+        sourceId = source.getId();
+        destinationId = destination.getId();
+
+        transactionService.deposit(sourceId, new BigDecimal("100.00"), "seed");
+        transactionRepository.deleteAll();
     }
 
     @Test
