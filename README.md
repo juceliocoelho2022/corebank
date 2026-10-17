@@ -1,10 +1,10 @@
 # CoreBank
 
-**CoreBank** is a production-oriented **Banking as a Service (BaaS)** portfolio backend built with Java 21 and Spring Boot. Version **0.2.0** adds atomic deposits, withdrawals and immutable transaction history on top of the v0.1 customer/account foundation.
+**CoreBank** is a production-oriented **Banking as a Service (BaaS)** portfolio backend built with Java 21 and Spring Boot. Version **0.3.0** adds atomic internal transfers between CoreBank accounts, preserving the deposits, withdrawals and immutable transaction history introduced in v0.2.
 
 The project is intentionally evolved release by release so each version demonstrates a specific backend engineering concern before introducing distributed-system complexity.
 
-## What v0.2 demonstrates
+## What v0.3 demonstrates
 
 - Java 21 and Spring Boot 3
 - Modular-monolith architecture
@@ -12,6 +12,8 @@ The project is intentionally evolved release by release so each version demonstr
 - PostgreSQL + Spring Data JPA
 - Flyway migrations
 - Atomic account balance updates
+- Atomic internal account-to-account transfers
+- Correlated `TRANSFER_OUT` / `TRANSFER_IN` history
 - Immutable money-movement history
 - Optimistic locking with JPA `@Version`
 - Transaction rollback guarantees
@@ -42,13 +44,16 @@ com.corebank
 │   ├── application
 │   ├── infrastructure
 │   └── web
+├── transfer
+│   ├── application
+│   └── web
 ├── shared
 │   ├── config
 │   └── exception
 └── CoreBankApplication
 ```
 
-CoreBank remains a **modular monolith** in v0.2. `Account` owns the mutable balance and status. `AccountTransaction` is an append-only audit record of a successful movement. `TransactionService` coordinates both in one ACID transaction.
+CoreBank remains a **modular monolith** in v0.3. `Account` owns mutable balance and status. `AccountTransaction` remains append-only. `TransactionService` coordinates deposits/withdrawals while `TransferService` coordinates two accounts and two correlated history entries inside one ACID transaction.
 
 This avoids premature microservices while keeping clear module boundaries for future extraction.
 
@@ -250,7 +255,86 @@ Descriptions:
 
 **Why:** this avoids meaningless blank values and keeps storage/API contracts deterministic.
 
-## 10. Existing v0.1 account rules remain valid
+## 10. Internal transfers are atomic and correlated
+
+Version v0.3 supports transfers only between two different CoreBank accounts in `BRL`. Both accounts must exist and be `ACTIVE`.
+
+A successful transfer creates exactly two immutable history rows:
+
+```text
+Source account      -> TRANSFER_OUT
+Destination account -> TRANSFER_IN
+```
+
+Both rows share the same `transferId`. Each row also stores `counterpartyAccountId`, pointing to the other account. Deposits and withdrawals keep both fields `null`.
+
+Example:
+
+```text
+Source balance before:      R$ 1,000.00
+Destination balance before: R$   200.00
+Transfer:                   R$   150.00
+
+Source balance after:       R$   850.00
+Destination balance after:  R$   350.00
+
+TRANSFER_OUT transferId=abc counterparty=<destination>
+TRANSFER_IN  transferId=abc counterparty=<source>
+```
+
+**Why:** a transfer is one business event with two account perspectives. Correlation metadata makes the event auditable without introducing the full double-entry ledger before v0.4.
+
+The complete operation runs under one Spring `@Transactional` boundary:
+
+```text
+BEGIN
+  validate source and destination
+  debit source
+  credit destination
+  persist both versioned accounts
+  insert TRANSFER_OUT
+  insert TRANSFER_IN
+COMMIT
+```
+
+Any failure causes `ROLLBACK`. The system must never commit only the debit, only the credit, or only one history row.
+
+Concurrent transfers keep the optimistic-locking strategy from v0.2. A stale account version returns `409 Conflict`; a competing request cannot double-spend the same source balance or silently overwrite a destination credit.
+
+### Transfer API
+
+```http
+POST /api/v1/transfers
+```
+
+Request:
+
+```json
+{
+  "sourceAccountId": "11111111-1111-1111-1111-111111111111",
+  "destinationAccountId": "22222222-2222-2222-2222-222222222222",
+  "amount": 150.00,
+  "description": "Rent"
+}
+```
+
+Success: `201 Created`
+
+```json
+{
+  "transferId": "33333333-3333-3333-3333-333333333333",
+  "sourceAccountId": "11111111-1111-1111-1111-111111111111",
+  "destinationAccountId": "22222222-2222-2222-2222-222222222222",
+  "amount": 150.00,
+  "sourceBalanceAfter": 850.00,
+  "destinationBalanceAfter": 350.00,
+  "createdAt": "2026-10-17T12:00:00Z"
+}
+```
+
+Error semantics remain explicit: invalid payloads and same-account transfers return `400`, missing accounts return `404`, and insufficient balance, invalid account state or optimistic-lock conflicts return `409`.
+
+## 11. Existing v0.1 account rules remain valid
 
 ### Customer
 
@@ -274,11 +358,13 @@ Descriptions:
 account_transactions
 ├── id UUID
 ├── account_id UUID
-├── type DEPOSIT | WITHDRAWAL
+├── type DEPOSIT | WITHDRAWAL | TRANSFER_OUT | TRANSFER_IN
 ├── amount NUMERIC(19,2)
 ├── balance_before NUMERIC(19,2)
 ├── balance_after NUMERIC(19,2)
 ├── description VARCHAR(200)
+├── transfer_id UUID NULL
+├── counterparty_account_id UUID NULL
 └── created_at TIMESTAMPTZ
 ```
 
@@ -419,15 +505,14 @@ Complete verification:
 mvn clean verify
 ```
 
-Important v0.2 suites:
+Important v0.3 suites:
 
 ```bash
 mvn -Dtest=AccountTest test
-mvn -Dtest=AccountTransactionPersistenceIT test
-mvn -Dtest=TransactionServiceTest test
-mvn -Dtest=ApiExceptionHandlerTest test
-mvn -Dtest=TransactionControllerTest test
-mvn -Dtest=MoneyMovementIT,ConcurrentWithdrawalIT test
+mvn -Dtest=TransactionServiceTest,TransferServiceTest test
+mvn -Dtest=TransactionControllerTest,TransferControllerTest test
+mvn -Dit.test=AccountTransactionPersistenceIT,TransferTransactionPersistenceIT verify
+mvn -Dit.test=MoneyMovementIT,ConcurrentWithdrawalIT,TransferIT,ConcurrentTransferIT verify
 ```
 
 PostgreSQL integration tests use Testcontainers.
@@ -451,6 +536,7 @@ Migrations:
 ```text
 V1__create_corebank_schema.sql
 V2__create_account_transactions.sql
+V3__add_transfer_metadata.sql
 ```
 
 ## Roadmap
@@ -458,8 +544,8 @@ V2__create_account_transactions.sql
 | Release | Scope |
 |---|---|
 | v0.1 | Customers + Accounts |
-| **v0.2** | **Deposits + Withdrawals + Transaction History** |
-| v0.3 | Account-to-account Transfers |
+| v0.2 | Deposits + Withdrawals + Transaction History |
+| **v0.3** | **Account-to-account Transfers** |
 | v0.4 | Double-entry Ledger |
 | v0.5 | Idempotency |
 | v0.6 | Kafka events |
