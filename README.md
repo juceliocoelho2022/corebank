@@ -437,7 +437,7 @@ Prerequisites:
 Start PostgreSQL, Kafka and Redis:
 
 ```bash
-docker compose up -d postgres kafka
+docker compose up -d postgres kafka redis
 ```
 
 Run the application:
