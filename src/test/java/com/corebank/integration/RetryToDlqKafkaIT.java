@@ -4,6 +4,9 @@ import com.corebank.account.application.AccountService;
 import com.corebank.account.domain.Account;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.infrastructure.CustomerRepository;
+import com.corebank.event.application.DeadLetterService;
+import com.corebank.event.application.PublicationFailureClassifier;
+import com.corebank.event.application.RetryPolicy;
 import com.corebank.event.domain.DeadLetterEvent;
 import com.corebank.event.domain.DeadLetterStatus;
 import com.corebank.event.domain.DomainEventType;
@@ -29,7 +32,6 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -45,7 +47,8 @@ import java.util.concurrent.CompletableFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest(properties = {
         "spring.kafka.admin.auto-create=true",
@@ -71,13 +74,12 @@ class RetryToDlqKafkaIT {
     @Autowired TransactionService transactionService;
     @Autowired OutboxEventRepository outboxRepository;
     @Autowired DeadLetterEventRepository deadLetterRepository;
-    @Autowired OutboxPublicationWorker outboxWorker;
     @Autowired DeadLetterPublisher deadLetterPublisher;
+    @Autowired DeadLetterService deadLetterService;
+    @Autowired RetryPolicy retryPolicy;
+    @Autowired PublicationFailureClassifier failureClassifier;
     @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper objectMapper;
-
-    @MockitoSpyBean(name = "kafkaTemplate")
-    KafkaTemplate<Object, Object> kafkaTemplate;
 
     @BeforeEach
     void clean() {
@@ -86,6 +88,7 @@ class RetryToDlqKafkaIT {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void exhaustedPrimaryEvent_shouldReachDurableDlqAndKafkaDlq() throws Exception {
         Customer customer = customerRepository.saveAndFlush(new Customer(
                 "Retry DLQ Customer",
@@ -98,11 +101,21 @@ class RetryToDlqKafkaIT {
                 .findFirst()
                 .orElseThrow();
 
-        doReturn(failedFuture(new TimeoutException("primary broker timeout")))
-                .when(kafkaTemplate).send(eq(PRIMARY_TOPIC), anyString(), anyString());
+        KafkaTemplate<String, String> failingKafkaTemplate = mock(KafkaTemplate.class);
+        when(failingKafkaTemplate.send(eq(PRIMARY_TOPIC), anyString(), anyString()))
+                .thenReturn(failedFuture(new TimeoutException("primary broker timeout")));
+
+        OutboxPublicationWorker failingOutboxWorker = new OutboxPublicationWorker(
+                outboxRepository,
+                failingKafkaTemplate,
+                objectMapper,
+                retryPolicy,
+                failureClassifier,
+                deadLetterService,
+                PRIMARY_TOPIC);
 
         for (int attempt = 1; attempt <= 5; attempt++) {
-            assertThat(outboxWorker.publishNext()).isTrue();
+            assertThat(failingOutboxWorker.publishNext()).isTrue();
             if (attempt < 5) {
                 jdbc.update(
                         "UPDATE outbox_events SET next_attempt_at = NOW() - INTERVAL '1 second' WHERE id = ?",
