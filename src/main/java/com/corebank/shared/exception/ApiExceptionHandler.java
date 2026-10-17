@@ -6,6 +6,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -22,9 +23,7 @@ public class ApiExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request validation failed");
         problem.setTitle("Bad Request");
         List<Map<String, String>> errors = ex.getBindingResult().getFieldErrors().stream()
-                .map(error -> Map.of(
-                        "field", error.getField(),
-                        "message", error.getDefaultMessage() == null ? "Invalid value" : error.getDefaultMessage()))
+                .map(error -> Map.of("field", error.getField(), "message", error.getDefaultMessage() == null ? "Invalid value" : error.getDefaultMessage()))
                 .toList();
         problem.setProperty("errors", errors);
         return problem(HttpStatus.BAD_REQUEST, problem);
@@ -39,9 +38,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     ResponseEntity<ProblemDetail> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
-                HttpStatus.BAD_REQUEST,
-                "Invalid value for parameter '" + ex.getName() + "'");
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Invalid value for parameter '" + ex.getName() + "'");
         problem.setTitle("Bad Request");
         return problem(HttpStatus.BAD_REQUEST, problem);
     }
@@ -67,6 +64,13 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.CONFLICT, problem);
     }
 
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    ResponseEntity<ProblemDetail> handleOptimisticLock(ObjectOptimisticLockingFailureException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "Account was updated concurrently; retry the operation using the latest balance");
+        problem.setTitle("Conflict");
+        return problem(HttpStatus.CONFLICT, problem);
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
@@ -75,8 +79,6 @@ public class ApiExceptionHandler {
     }
 
     private ResponseEntity<ProblemDetail> problem(HttpStatus status, ProblemDetail body) {
-        return ResponseEntity.status(status)
-                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(body);
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(body);
     }
 }
