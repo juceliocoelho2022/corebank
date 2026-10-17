@@ -50,5 +50,5 @@ corebank:
 info:
   app:
     name: CoreBank
-    version: 0.5.0
+    version: 0.6.0
     description: Banking as a Service portfolio backend
