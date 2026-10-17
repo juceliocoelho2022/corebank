@@ -2,6 +2,7 @@ package com.corebank;
 
 import com.corebank.account.infrastructure.AccountRepository;
 import com.corebank.customer.infrastructure.CustomerRepository;
+import com.corebank.event.infrastructure.DeadLetterEventRepository;
 import com.corebank.event.infrastructure.OutboxEventRepository;
 import com.corebank.idempotency.infrastructure.IdempotencyLockRepository;
 import com.corebank.idempotency.infrastructure.IdempotencyRecordRepository;
@@ -45,6 +46,9 @@ class CoreBankApplicationTest {
 
     @MockitoBean
     private OutboxEventRepository outboxEventRepository;
+
+    @MockitoBean
+    private DeadLetterEventRepository deadLetterEventRepository;
 
     @MockitoBean
     private JdbcTemplate jdbcTemplate;
