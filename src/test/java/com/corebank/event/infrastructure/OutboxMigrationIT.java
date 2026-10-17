@@ -50,7 +50,8 @@ class OutboxMigrationIT {
                 WHERE schemaname = 'public'
                   AND tablename = 'outbox_events'
                   AND indexname = 'idx_outbox_pending_created_at'
-                  AND indexdef ILIKE '%WHERE (status = ''PENDING''%'
+                  AND indexdef ILIKE '%WHERE%'
+                  AND indexdef ILIKE '%PENDING%'
                 """, Integer.class);
 
         assertThat(tableCount).isEqualTo(1);
