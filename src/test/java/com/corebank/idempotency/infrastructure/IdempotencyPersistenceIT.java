@@ -2,6 +2,7 @@ package com.corebank.idempotency.infrastructure;
 
 import com.corebank.idempotency.domain.IdempotencyOperation;
 import com.corebank.idempotency.domain.IdempotencyRecord;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -47,14 +48,14 @@ class IdempotencyPersistenceIT {
                 "withdrawal-123",
                 IdempotencyOperation.WITHDRAWAL,
                 "b".repeat(64));
-        record.complete(null, 201, "{\"type\":\"WITHDRAWAL\"}");
+        record.complete(null, 201, JsonNodeFactory.instance.objectNode().put("type", "WITHDRAWAL"));
 
         IdempotencyRecord persisted = repository.saveAndFlush(record);
         IdempotencyRecord reloaded = repository.findByIdempotencyKey("withdrawal-123").orElseThrow();
 
         assertThat(reloaded.getStatus().name()).isEqualTo("COMPLETED");
         assertThat(reloaded.getHttpStatus()).isEqualTo(201);
-        assertThat(reloaded.getResponseBody()).contains("WITHDRAWAL");
+        assertThat(reloaded.getResponseBody().path("type").asText()).isEqualTo("WITHDRAWAL");
         assertThat(reloaded.getCompletedAt()).isNotNull();
         assertThat(reloaded.getId()).isEqualTo(persisted.getId());
     }
