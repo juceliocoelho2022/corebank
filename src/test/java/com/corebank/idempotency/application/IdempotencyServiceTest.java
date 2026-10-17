@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,7 +65,7 @@ class IdempotencyServiceTest {
         assertThat(result.httpStatus()).isEqualTo(201);
         assertThat(result.replayed()).isFalse();
         assertThat(executions).hasValue(1);
-        verify(repository).saveAndFlush(any(IdempotencyRecord.class));
+        verify(repository, times(2)).saveAndFlush(any(IdempotencyRecord.class));
     }
 
     @Test
