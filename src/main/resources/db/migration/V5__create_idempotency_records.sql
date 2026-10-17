@@ -2,7 +2,7 @@ CREATE TABLE idempotency_records (
     id UUID PRIMARY KEY,
     idempotency_key VARCHAR(128) NOT NULL,
     operation_type VARCHAR(32) NOT NULL,
-    request_hash CHAR(64) NOT NULL,
+    request_hash VARCHAR(64) NOT NULL,
     status VARCHAR(16) NOT NULL,
     resource_id UUID NULL,
     response_body JSONB NULL,
