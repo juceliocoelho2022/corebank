@@ -6,6 +6,7 @@ import com.corebank.event.domain.OutboxStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import org.apache.kafka.common.errors.TimeoutException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,7 +25,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
@@ -73,18 +73,18 @@ class OutboxPublicationWorkerIT {
     }
 
     @Test
-    void failedKafkaSend_shouldRollbackPublishedState() {
+    void failedKafkaSend_shouldPersistRetryState() {
         OutboxEvent event = repository.saveAndFlush(pendingEvent());
         CompletableFuture failed = new CompletableFuture();
-        failed.completeExceptionally(new IllegalStateException("broker unavailable"));
+        failed.completeExceptionally(new TimeoutException("broker unavailable"));
         when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenReturn(failed);
 
-        assertThatThrownBy(worker::publishNext)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("publish outbox event");
+        assertThat(worker.publishNext()).isTrue();
 
         OutboxEvent reloaded = repository.findById(event.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(OutboxStatus.PENDING);
+        assertThat(reloaded.getAttemptCount()).isEqualTo(1);
+        assertThat(reloaded.getLastErrorType()).isEqualTo("TimeoutException");
         assertThat(reloaded.getPublishedAt()).isNull();
     }
 
