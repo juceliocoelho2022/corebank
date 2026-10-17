@@ -4,6 +4,9 @@ import com.corebank.idempotency.domain.IdempotencyOperation;
 import com.corebank.idempotency.domain.IdempotencyRecord;
 import com.corebank.idempotency.infrastructure.IdempotencyLockRepository;
 import com.corebank.idempotency.infrastructure.IdempotencyRecordRepository;
+import com.corebank.idempotency.infrastructure.IdempotencyReplayCache;
+import com.corebank.idempotency.infrastructure.ReplayPointer;
+import org.springframework.context.ApplicationEventPublisher;
 import com.corebank.shared.exception.ConflictException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,13 +35,15 @@ class IdempotencyServiceTest {
 
     @Mock IdempotencyRecordRepository repository;
     @Mock IdempotencyLockRepository lockRepository;
+    @Mock IdempotencyReplayCache replayCache;
+    @Mock ApplicationEventPublisher events;
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private IdempotencyService service;
 
     @BeforeEach
     void setUp() {
-        service = new IdempotencyService(repository, lockRepository, objectMapper);
+        service = new IdempotencyService(repository, lockRepository, objectMapper, replayCache, events);
     }
 
     @Test
@@ -136,6 +141,76 @@ class IdempotencyServiceTest {
                 () -> null))
                 .isInstanceOf(ConflictException.class)
                 .hasMessageContaining("already in progress");
+    }
+
+
+    @Test
+    void validRedisPointerStillLoadsPostgresAndReplaysOnce() throws Exception {
+        String key = KEY;
+        UUID recordId = UUID.randomUUID();
+        UUID resourceId = UUID.randomUUID();
+        IdempotencyRecord record = IdempotencyRecord.start(key, IdempotencyOperation.DEPOSIT, HASH);
+        setId(record, recordId);
+        record.complete(resourceId, 201, objectMapper.valueToTree(new TestResponse(resourceId, "ok")));
+        ReplayPointer pointer = ReplayPointer.from(record);
+        when(replayCache.find(key)).thenReturn(Optional.of(pointer));
+        when(repository.findById(recordId)).thenReturn(Optional.of(record));
+        AtomicInteger executions = new AtomicInteger();
+
+        var execution = service.execute(key, IdempotencyOperation.DEPOSIT, HASH,
+                TestResponse.class, () -> {
+                    executions.incrementAndGet();
+                    return null;
+                });
+
+        assertThat(execution.replayed()).isTrue();
+        assertThat(executions).hasValue(0);
+        verify(repository, never()).findByIdempotencyKey(key);
+        verify(lockRepository, never()).tryLock(any());
+    }
+
+    @Test
+    void mismatchedRedisPointerFallsBackToAuthoritativePostgres() throws Exception {
+        UUID resourceId = UUID.randomUUID();
+        IdempotencyRecord record = IdempotencyRecord.start(KEY, IdempotencyOperation.DEPOSIT, HASH);
+        record.complete(resourceId, 201, objectMapper.valueToTree(new TestResponse(resourceId, "ok")));
+        ReplayPointer stale = new ReplayPointer(UUID.randomUUID(), IdempotencyOperation.WITHDRAWAL,
+                HASH, resourceId, 201);
+        when(replayCache.find(KEY)).thenReturn(Optional.of(stale));
+        when(repository.findByIdempotencyKey(KEY)).thenReturn(Optional.of(record));
+        var execution = service.execute(KEY, IdempotencyOperation.DEPOSIT, HASH,
+                TestResponse.class, () -> null);
+        assertThat(execution.replayed()).isTrue();
+        verify(replayCache).evict(KEY);
+    }
+
+    @Test
+    void successfulNewCompletionEmitsEventForPostCommitWriter() throws Exception {
+        UUID resourceId = UUID.randomUUID();
+        UUID recordId = UUID.randomUUID();
+        when(repository.findByIdempotencyKey(KEY)).thenReturn(Optional.empty());
+        when(lockRepository.tryLock(KEY)).thenReturn(true);
+        when(repository.saveAndFlush(any(IdempotencyRecord.class))).thenAnswer(inv -> {
+            IdempotencyRecord record = inv.getArgument(0);
+            setId(record, recordId);
+            return record;
+        });
+        service.execute(KEY, IdempotencyOperation.DEPOSIT, HASH, TestResponse.class,
+                () -> new IdempotencyCommandResult<>(resourceId, 201, new TestResponse(resourceId, "ok")));
+        var event = org.mockito.ArgumentCaptor.forClass(IdempotencyCompletedEvent.class);
+        verify(events).publishEvent(event.capture());
+        assertThat(event.getValue().pointer().recordId()).isEqualTo(recordId);
+        verify(replayCache, never()).putCompleted(any(), any());
+    }
+
+    private static void setId(IdempotencyRecord record, UUID id) {
+        try {
+            var field = IdempotencyRecord.class.getDeclaredField("id");
+            field.setAccessible(true);
+            field.set(record, id);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private record TestResponse(UUID id, String value) {
