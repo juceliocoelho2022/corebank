@@ -76,8 +76,8 @@ class RetryToDlqKafkaIT {
     @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper objectMapper;
 
-    @MockitoSpyBean
-    KafkaTemplate<String, String> kafkaTemplate;
+    @MockitoSpyBean(name = "kafkaTemplate")
+    KafkaTemplate<Object, Object> kafkaTemplate;
 
     @BeforeEach
     void clean() {
