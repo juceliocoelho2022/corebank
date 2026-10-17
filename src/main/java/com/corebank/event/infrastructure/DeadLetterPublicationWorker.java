@@ -1,6 +1,7 @@
 package com.corebank.event.infrastructure;
 
 import com.corebank.event.application.DeadLetterRetryPolicy;
+import com.corebank.event.application.PublicationFailureClassifier;
 import com.corebank.event.domain.DeadLetterEvent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,6 +26,7 @@ public class DeadLetterPublicationWorker {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final DeadLetterRetryPolicy retryPolicy;
+    private final PublicationFailureClassifier failureClassifier;
     private final String topic;
 
     public DeadLetterPublicationWorker(
@@ -32,11 +34,13 @@ public class DeadLetterPublicationWorker {
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
             DeadLetterRetryPolicy retryPolicy,
+            PublicationFailureClassifier failureClassifier,
             @Value("${corebank.kafka.topic.financial-events-dlq:corebank.financial-events.dlq.v1}") String topic) {
         this.repository = repository;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.retryPolicy = retryPolicy;
+        this.failureClassifier = failureClassifier;
         this.topic = topic;
     }
 
@@ -52,8 +56,8 @@ public class DeadLetterPublicationWorker {
             String json = objectMapper.writeValueAsString(event.toEnvelope());
             kafkaTemplate.send(topic, event.getMessageKey(), json).get();
         } catch (InterruptedException ex) {
-            handleFailure(event, ex);
             Thread.currentThread().interrupt();
+            handleFailure(event, ex);
             return true;
         } catch (JsonProcessingException | ExecutionException | RuntimeException ex) {
             handleFailure(event, ex);
@@ -69,36 +73,15 @@ public class DeadLetterPublicationWorker {
     }
 
     private void handleFailure(DeadLetterEvent event, Throwable failure) {
-        Throwable root = rootCause(failure);
         int nextPublishAttempt = event.getPublishAttempts() + 1;
         Instant nextAttemptAt = Instant.now().plus(retryPolicy.delayAfterFailure(nextPublishAttempt));
-        event.recordPublishFailure(errorType(root), sanitizedMessage(root), nextAttemptAt);
+        event.recordPublishFailure(
+                failureClassifier.errorType(failure),
+                failureClassifier.sanitizedMessage(failure),
+                nextAttemptAt);
         repository.saveAndFlush(event);
         log.warn(
                 "Scheduled dead-letter retry deadLetterId={} originalEventId={} publishAttempts={} nextAttemptAt={} status=PENDING topic={}",
                 event.getId(), event.getOriginalEventId(), event.getPublishAttempts(), event.getNextAttemptAt(), topic);
-    }
-
-    private static Throwable rootCause(Throwable failure) {
-        Throwable current = failure;
-        while (current instanceof ExecutionException && current.getCause() != null) {
-            current = current.getCause();
-        }
-        return current;
-    }
-
-    private static String errorType(Throwable failure) {
-        String simpleName = failure.getClass().getSimpleName();
-        return simpleName == null || simpleName.isBlank() ? failure.getClass().getName() : simpleName;
-    }
-
-    private static String sanitizedMessage(Throwable failure) {
-        if (failure instanceof InterruptedException) {
-            return "DLQ publication interrupted";
-        }
-        if (failure instanceof JsonProcessingException) {
-            return "DLQ event serialization failure";
-        }
-        return "DLQ Kafka publication failure";
     }
 }
