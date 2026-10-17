@@ -5,6 +5,12 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/corebank}
     username: ${DB_USERNAME:corebank}
     password: ${DB_PASSWORD:corebank_dev}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: 500ms
+      timeout: 500ms
   jpa:
     hibernate:
       ddl-auto: validate
@@ -23,7 +29,16 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
+management:
+  health:
+    redis:
+      enabled: false
+
 corebank:
+  cache:
+    key-prefix: "corebank:v1:"
+    summary-ttl: 5m
+    idempotency-replay-ttl: 1h
   kafka:
     topic:
       financial-events: corebank.financial-events.v1
