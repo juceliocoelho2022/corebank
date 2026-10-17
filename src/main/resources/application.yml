@@ -46,6 +46,12 @@ corebank:
   outbox:
     batch-size: 100
     fixed-delay-ms: 2000
+    max-attempts: 5
+    retry-delays:
+      - 2s
+      - 5s
+      - 15s
+      - 30s
 
 info:
   app:
