@@ -1,27 +1,31 @@
 # CoreBank
 
-**CoreBank** is a production-oriented **Banking as a Service (BaaS)** portfolio backend built with Java 21 and Spring Boot. Version **0.3.0** adds atomic internal transfers between CoreBank accounts, preserving the deposits, withdrawals and immutable transaction history introduced in v0.2.
+**CoreBank** is a production-oriented **Banking as a Service (BaaS)** portfolio backend built with Java 21 and Spring Boot. Version **0.4.0** adds an immutable **double-entry ledger** and account-level reconciliation while preserving the operational balance model, deposits, withdrawals, internal transfers and optimistic concurrency controls from previous releases.
 
-The project is intentionally evolved release by release so each version demonstrates a specific backend engineering concern before introducing distributed-system complexity.
+The project evolves release by release so each version demonstrates one group of backend engineering concerns before introducing distributed-system complexity.
 
-## What v0.3 demonstrates
+## What v0.4 demonstrates
 
-- Java 21 and Spring Boot 3
+- Java 21 and Spring Boot 3.5
 - Modular-monolith architecture
-- REST APIs with Bean Validation
 - PostgreSQL + Spring Data JPA
 - Flyway migrations
-- Atomic account balance updates
-- Atomic internal account-to-account transfers
-- Correlated `TRANSFER_OUT` / `TRANSFER_IN` history
-- Immutable money-movement history
+- ACID money movements
+- Deposits, withdrawals and internal transfers
+- Immutable transaction history
+- Immutable double-entry ledger
+- One balanced journal per financial operation
+- `CUSTOMER_LIABILITY` ledger accounts per CoreBank account
+- Technical `TECH:CASH_CLEARING` account
+- Opening-balance backfill during migration
+- PostgreSQL append-only triggers for journal/ledger rows
+- Operational balance × ledger reconciliation
 - Optimistic locking with JPA `@Version`
-- Transaction rollback guarantees
 - RFC 9457-style `ProblemDetail` errors
 - Swagger / OpenAPI
-- Actuator health endpoint
-- Unit, MVC, persistence and concurrency-focused tests
-- Testcontainers + PostgreSQL
+- Actuator
+- Unit, MVC, integration and concurrency tests
+- Testcontainers PostgreSQL
 - JaCoCo
 - Docker Compose
 
@@ -47,23 +51,217 @@ com.corebank
 ├── transfer
 │   ├── application
 │   └── web
+├── ledger
+│   ├── domain
+│   ├── application
+│   └── infrastructure
+├── reconciliation
+│   ├── application
+│   └── web
 ├── shared
 │   ├── config
 │   └── exception
 └── CoreBankApplication
 ```
 
-CoreBank remains a **modular monolith** in v0.3. `Account` owns mutable balance and status. `AccountTransaction` remains append-only. `TransactionService` coordinates deposits/withdrawals while `TransferService` coordinates two accounts and two correlated history entries inside one ACID transaction.
+CoreBank remains a **modular monolith** in v0.4. `accounts.balance` is still the operational balance used by business flows. The ledger is an immutable accounting record used for auditability and reconciliation; it is not yet the sole source of truth.
 
-This avoids premature microservices while keeping clear module boundaries for future extraction.
+## Core financial model
 
-# Business Rules
+### Operational model
 
-The business rules are intentionally documented here because they are part of the system design, not just implementation details.
+`Account` owns mutable account state:
 
-## 1. Only ACTIVE accounts can move money
+```text
+status
+balance
+currency
+version
+```
 
-An account may be in one of three states:
+`AccountTransaction` stores immutable movement history:
+
+```text
+DEPOSIT
+WITHDRAWAL
+TRANSFER_OUT
+TRANSFER_IN
+```
+
+Transfers use the same `transferId` on both account-history rows and store the counterparty account id.
+
+### Double-entry ledger
+
+Every successful financial operation produces exactly one `journal_entry` and exactly two `ledger_entries` in v0.4.
+
+```text
+journal_entries
+├── id
+├── reference_type
+├── reference_id
+├── description
+└── created_at
+
+ledger_entries
+├── id
+├── journal_entry_id
+├── ledger_account_id
+├── side DEBIT | CREDIT
+├── amount
+└── created_at
+```
+
+Required invariant:
+
+```text
+SUM(DEBIT) = SUM(CREDIT)
+```
+
+Customer accounts map to one ledger account:
+
+```text
+CUSTOMER:<accountId>
+type = CUSTOMER_LIABILITY
+```
+
+The technical clearing account is:
+
+```text
+TECH:CASH_CLEARING
+```
+
+### Deposit posting
+
+For a deposit of `100.00`:
+
+```text
+DEBIT   TECH:CASH_CLEARING           100.00
+CREDIT  CUSTOMER_LIABILITY(account)  100.00
+```
+
+### Withdrawal posting
+
+```text
+DEBIT   CUSTOMER_LIABILITY(account)  100.00
+CREDIT  TECH:CASH_CLEARING           100.00
+```
+
+### Internal transfer posting
+
+For transfer A → B:
+
+```text
+DEBIT   CUSTOMER_LIABILITY(A)  100.00
+CREDIT  CUSTOMER_LIABILITY(B)  100.00
+```
+
+The transfer journal uses the existing business `transferId` as `reference_id`; no second transfer identifier is created.
+
+## Atomicity
+
+Operational state, movement history and ledger posting share the same Spring transaction.
+
+Example deposit flow:
+
+```text
+BEGIN
+  load account
+  validate business rules
+  update operational balance
+  insert account_transactions row
+  insert journal_entries row
+  insert two ledger_entries rows
+COMMIT
+```
+
+If ledger persistence fails, the operational balance and transaction history are rolled back too.
+
+The same atomicity applies to withdrawals and internal transfers.
+
+## Ledger immutability
+
+`journal_entries` and `ledger_entries` are append-only.
+
+At application level, entities expose no accounting-field setters. At database level, PostgreSQL triggers reject both:
+
+```text
+UPDATE
+DELETE
+```
+
+Future corrections should be represented through compensating/reversal entries rather than mutation of historical accounting records.
+
+## Opening-balance migration
+
+Migration `V4__create_double_entry_ledger.sql` creates:
+
+- `ledger_accounts`;
+- `journal_entries`;
+- `ledger_entries`;
+- `TECH:CASH_CLEARING`;
+- one `CUSTOMER_LIABILITY` for every existing CoreBank account.
+
+Existing non-zero operational balances receive an `OPENING_BALANCE` journal:
+
+```text
+DEBIT   TECH:CASH_CLEARING
+CREDIT  CUSTOMER_LIABILITY(account)
+```
+
+Zero-balance accounts receive their ledger account but no zero-value journal.
+
+This allows existing accounts to reconcile immediately after upgrading to v0.4.
+
+## Reconciliation
+
+CoreBank can compare the operational balance with the customer-liability position in the ledger.
+
+For a liability ledger account:
+
+```text
+ledger balance = credits - debits
+```
+
+Difference:
+
+```text
+operational balance - ledger balance
+```
+
+Statuses:
+
+```text
+RECONCILED
+MISMATCH
+```
+
+A mismatch is reported only; CoreBank does **not** auto-correct either side.
+
+### Reconciliation API
+
+```http
+GET /api/v1/reconciliation/accounts/{accountId}
+```
+
+Example response:
+
+```json
+{
+  "accountId": "11111111-1111-1111-1111-111111111111",
+  "operationalBalance": 850.00,
+  "ledgerBalance": 850.00,
+  "difference": 0.00,
+  "status": "RECONCILED"
+}
+```
+
+Missing accounts return `404 Not Found`.
+
+## Business rules
+
+### Account state
+
+Accounts may be:
 
 ```text
 ACTIVE
@@ -71,374 +269,84 @@ BLOCKED
 CLOSED
 ```
 
-Only `ACTIVE` accounts accept deposits or withdrawals.
+Only `ACTIVE` accounts may participate in money movements.
 
-**Why:** a blocked or closed account must not change its financial position. Keeping this rule inside the `Account` aggregate prevents controllers or services from accidentally bypassing it.
+### Money validation
 
-**Result:** attempts to move money on `BLOCKED` or `CLOSED` accounts return `409 Conflict`.
+- amount must be positive;
+- BRL only;
+- maximum two decimal places;
+- silent rounding is not allowed;
+- operational balance cannot become negative.
 
-Example:
+### Deposits and withdrawals
 
-```text
-Account status: BLOCKED
-Withdrawal: R$ 50.00
-Result: rejected
-Balance: unchanged
-History: unchanged
-```
+Each successful deposit or withdrawal creates:
 
-## 2. Money-movement amounts must be positive
+- one operational balance change;
+- one `account_transactions` row;
+- one balanced accounting journal;
+- two ledger entries.
 
-Deposits and withdrawals require:
+Rejected operations create none of those financial records.
 
-```text
-amount > 0.00
-```
+### Transfers
 
-Zero and negative values are invalid.
+Transfers require:
 
-**Why:** a deposit of `0.00` has no business meaning, and negative values would invert the semantic meaning of deposit/withdrawal.
+- different source and destination accounts;
+- both accounts exist;
+- both accounts are `ACTIVE`;
+- both accounts are BRL;
+- sufficient source balance.
 
-**Result:** invalid values return `400 Bad Request`.
-
-## 3. BRL monetary values use at most two decimal places
-
-The API and database use decimal monetary values with scale 2:
-
-```text
-NUMERIC(19,2)
-```
-
-Examples:
+A successful transfer creates:
 
 ```text
-100.00   valid
-10.50    valid
-10.001   invalid
+TRANSFER_OUT on source
+TRANSFER_IN  on destination
+one TRANSFER journal
+DEBIT source liability
+CREDIT destination liability
 ```
 
-**Why:** CoreBank must never silently round a value submitted by a client. Silent rounding can create reconciliation differences in transactional systems.
+All records share one ACID boundary.
 
-## 4. Withdrawals cannot exceed the available balance
+### Concurrency
 
-A withdrawal is accepted only when:
+Accounts use optimistic locking with JPA `@Version`.
 
-```text
-balance >= withdrawal amount
-```
+Concurrent movements cannot silently double-spend a stale balance or overwrite a destination credit. A stale write is treated as a conflict and the surrounding transaction rolls back.
 
-Example:
+## Main APIs
 
-```text
-Current balance: R$ 100.00
-Requested withdrawal: R$ 130.00
-Result: 409 Conflict
-Final balance: R$ 100.00
-```
-
-**Why:** v0.2 has no overdraft or credit-limit concept. Therefore the committed balance must always remain non-negative.
-
-The same invariant is also protected at database level:
-
-```text
-balance >= 0
-```
-
-## 5. Every successful movement creates exactly one history record
-
-A successful deposit or withdrawal produces one immutable `account_transactions` row containing:
-
-```text
-transaction id
-account id
-type
-amount
-balance before
-balance after
-description
-created at
-```
-
-Example:
-
-```text
-Balance before: R$ 200.00
-Withdrawal:     R$ 50.00
-Balance after:  R$ 150.00
-
-History:
-WITHDRAWAL | 50.00 | before=200.00 | after=150.00
-```
-
-**Why:** storing before/after snapshots makes troubleshooting and audit analysis easier and prepares the model for the double-entry ledger planned for v0.4.
-
-Transaction history is append-only in application behavior. v0.2 exposes no update or delete endpoint for financial movements.
-
-## 6. Balance change and transaction history are atomic
-
-A movement is processed inside a single database transaction:
-
-```text
-BEGIN
-  load account
-  validate business rules
-  update account balance
-  insert transaction history
-COMMIT
-```
-
-If any step fails:
-
-```text
-ROLLBACK
-```
-
-**Why:** a financial system must never commit a changed balance without its corresponding audit record, nor create a transaction record without the matching balance change.
-
-Required invariant:
-
-```text
-changed balance <=> exactly one committed history record
-```
-
-## 7. Rejected operations do not create history
-
-If a request fails because of:
-
-- insufficient balance;
-- invalid amount;
-- blocked account;
-- closed account;
-- missing account;
-- concurrency conflict;
-
-then both balance and transaction history remain unchanged.
-
-**Why:** transaction history represents accepted financial events, not failed attempts. Operational/security audit events can be introduced separately in a later observability/audit module.
-
-## 8. Concurrent withdrawals cannot spend the same balance twice
-
-Accounts use optimistic locking through JPA `@Version`.
-
-Critical scenario:
-
-```text
-Initial balance: R$ 100.00
-
-Request A -> withdraw R$ 80.00
-Request B -> withdraw R$ 80.00
-```
-
-Both requests may initially observe the same balance, but only one versioned account update may commit.
-
-Expected committed state:
-
-```text
-Successful withdrawals: 1
-Conflicting withdrawals: 1
-Final balance: R$ 20.00
-Withdrawal history rows: 1
-```
-
-**Why:** without concurrency control, both requests could subtract from the same original balance and create an invalid financial state.
-
-A stale concurrent update is returned as `409 Conflict` and implementation details such as Hibernate/SQL exceptions are not exposed to API clients.
-
-## 9. Transaction descriptions are optional and normalized
-
-Descriptions:
-
-- are optional;
-- are trimmed before persistence;
-- whitespace-only values become `null`;
-- have a maximum length of 200 characters.
-
-**Why:** this avoids meaningless blank values and keeps storage/API contracts deterministic.
-
-## 10. Internal transfers are atomic and correlated
-
-Version v0.3 supports transfers only between two different CoreBank accounts in `BRL`. Both accounts must exist and be `ACTIVE`.
-
-A successful transfer creates exactly two immutable history rows:
-
-```text
-Source account      -> TRANSFER_OUT
-Destination account -> TRANSFER_IN
-```
-
-Both rows share the same `transferId`. Each row also stores `counterpartyAccountId`, pointing to the other account. Deposits and withdrawals keep both fields `null`.
-
-Example:
-
-```text
-Source balance before:      R$ 1,000.00
-Destination balance before: R$   200.00
-Transfer:                   R$   150.00
-
-Source balance after:       R$   850.00
-Destination balance after:  R$   350.00
-
-TRANSFER_OUT transferId=abc counterparty=<destination>
-TRANSFER_IN  transferId=abc counterparty=<source>
-```
-
-**Why:** a transfer is one business event with two account perspectives. Correlation metadata makes the event auditable without introducing the full double-entry ledger before v0.4.
-
-The complete operation runs under one Spring `@Transactional` boundary:
-
-```text
-BEGIN
-  validate source and destination
-  debit source
-  credit destination
-  persist both versioned accounts
-  insert TRANSFER_OUT
-  insert TRANSFER_IN
-COMMIT
-```
-
-Any failure causes `ROLLBACK`. The system must never commit only the debit, only the credit, or only one history row.
-
-Concurrent transfers keep the optimistic-locking strategy from v0.2. A stale account version returns `409 Conflict`; a competing request cannot double-spend the same source balance or silently overwrite a destination credit.
-
-### Transfer API
-
-```http
-POST /api/v1/transfers
-```
-
-Request:
-
-```json
-{
-  "sourceAccountId": "11111111-1111-1111-1111-111111111111",
-  "destinationAccountId": "22222222-2222-2222-2222-222222222222",
-  "amount": 150.00,
-  "description": "Rent"
-}
-```
-
-Success: `201 Created`
-
-```json
-{
-  "transferId": "33333333-3333-3333-3333-333333333333",
-  "sourceAccountId": "11111111-1111-1111-1111-111111111111",
-  "destinationAccountId": "22222222-2222-2222-2222-222222222222",
-  "amount": 150.00,
-  "sourceBalanceAfter": 850.00,
-  "destinationBalanceAfter": 350.00,
-  "createdAt": "2026-10-17T12:00:00Z"
-}
-```
-
-Error semantics remain explicit: invalid payloads and same-account transfers return `400`, missing accounts return `404`, and insufficient balance, invalid account state or optimistic-lock conflicts return `409`.
-
-## 11. Existing v0.1 account rules remain valid
-
-### Customer
-
-- document is unique;
-- email is unique case-insensitively at database level;
-- name length is 3–120 characters.
-
-### Account
-
-- default branch: `0001`;
-- currency: `BRL`;
-- initial status: `ACTIVE`;
-- initial balance: `0.00`;
-- account number comes from PostgreSQL sequence starting at `10000001`;
-- balance is `NUMERIC(19,2)` and cannot be negative;
-- account updates use optimistic locking.
-
-## Transaction data model
-
-```text
-account_transactions
-├── id UUID
-├── account_id UUID
-├── type DEPOSIT | WITHDRAWAL | TRANSFER_OUT | TRANSFER_IN
-├── amount NUMERIC(19,2)
-├── balance_before NUMERIC(19,2)
-├── balance_after NUMERIC(19,2)
-├── description VARCHAR(200)
-├── transfer_id UUID NULL
-├── counterparty_account_id UUID NULL
-└── created_at TIMESTAMPTZ
-```
-
-Database constraints independently protect positive amounts, valid types and non-negative balance snapshots.
-
-## API
-
-### Create customer
+### Customers
 
 ```http
 POST /api/v1/customers
 ```
 
-### Create account
+### Accounts
 
 ```http
 POST /api/v1/accounts
+GET  /api/v1/accounts/{accountId}
+GET  /api/v1/accounts/{accountId}/balance
 ```
 
-### Get account
+Creating an account also creates its matching `CUSTOMER_LIABILITY` ledger account in the same transaction.
 
-```http
-GET /api/v1/accounts/{accountId}
-```
-
-### Get balance
-
-```http
-GET /api/v1/accounts/{accountId}/balance
-```
-
-### Deposit
+### Deposits
 
 ```http
 POST /api/v1/accounts/{accountId}/deposits
-Content-Type: application/json
 ```
 
-```json
-{
-  "amount": 1000.00,
-  "description": "Initial deposit"
-}
-```
-
-Success: `201 Created`
-
-```json
-{
-  "transactionId": "98b5d7e5-...",
-  "accountId": "5a38c8ca-...",
-  "type": "DEPOSIT",
-  "amount": 1000.00,
-  "balanceBefore": 0.00,
-  "balanceAfter": 1000.00,
-  "description": "Initial deposit",
-  "createdAt": "2026-10-17T12:00:00Z"
-}
-```
-
-### Withdrawal
+### Withdrawals
 
 ```http
 POST /api/v1/accounts/{accountId}/withdrawals
 ```
-
-```json
-{
-  "amount": 250.00,
-  "description": "ATM withdrawal"
-}
-```
-
-Success: `201 Created`.
 
 ### Transaction history
 
@@ -446,7 +354,17 @@ Success: `201 Created`.
 GET /api/v1/accounts/{accountId}/transactions
 ```
 
-Returns newest transactions first.
+### Transfers
+
+```http
+POST /api/v1/transfers
+```
+
+### Reconciliation
+
+```http
+GET /api/v1/reconciliation/accounts/{accountId}
+```
 
 ## Error contract
 
@@ -454,7 +372,7 @@ API failures use `application/problem+json`.
 
 | HTTP | Meaning |
 |---|---|
-| `400` | malformed JSON, invalid UUID, invalid amount, too many decimals, description too long |
+| `400` | malformed JSON, invalid UUID, invalid amount, too many decimals, invalid transfer input |
 | `404` | customer or account does not exist |
 | `409` | insufficient funds, blocked/closed account, integrity conflict, concurrent account update |
 | `500` | unexpected sanitized server failure |
@@ -497,22 +415,22 @@ Health:
 http://localhost:8080/actuator/health
 ```
 
-## Tests
+## Verification
 
-Complete verification:
+Full regression gate:
 
 ```bash
 mvn clean verify
 ```
 
-Important v0.3 suites:
+Important v0.4 suites include:
 
 ```bash
-mvn -Dtest=AccountTest test
-mvn -Dtest=TransactionServiceTest,TransferServiceTest test
-mvn -Dtest=TransactionControllerTest,TransferControllerTest test
-mvn -Dit.test=AccountTransactionPersistenceIT,TransferTransactionPersistenceIT verify
-mvn -Dit.test=MoneyMovementIT,ConcurrentWithdrawalIT,TransferIT,ConcurrentTransferIT verify
+mvn -Dtest=LedgerServiceTest,ReconciliationServiceTest,ReconciliationControllerTest test
+mvn -Dit.test=LedgerMigrationIT,LedgerPersistenceIT verify
+mvn -Dit.test=AccountLedgerCreationIT,MoneyMovementLedgerIT verify
+mvn -Dit.test=TransferLedgerIT,ConcurrentTransferIT verify
+mvn -Dit.test=ReconciliationIT verify
 ```
 
 PostgreSQL integration tests use Testcontainers.
@@ -525,18 +443,13 @@ target/site/jacoco/index.html
 
 ## Database migrations
 
-Flyway owns schema changes and Hibernate uses:
-
-```text
-ddl-auto: validate
-```
-
-Migrations:
+Flyway owns schema changes and Hibernate uses schema validation.
 
 ```text
 V1__create_corebank_schema.sql
 V2__create_account_transactions.sql
 V3__add_transfer_metadata.sql
+V4__create_double_entry_ledger.sql
 ```
 
 ## Roadmap
@@ -545,8 +458,8 @@ V3__add_transfer_metadata.sql
 |---|---|
 | v0.1 | Customers + Accounts |
 | v0.2 | Deposits + Withdrawals + Transaction History |
-| **v0.3** | **Account-to-account Transfers** |
-| v0.4 | Double-entry Ledger |
+| v0.3 | Account-to-account Transfers |
+| **v0.4** | **Double-entry Ledger + Reconciliation** |
 | v0.5 | Idempotency |
 | v0.6 | Kafka events |
 | v0.7 | Retry + DLQ |
@@ -559,6 +472,6 @@ V3__add_transfer_metadata.sql
 
 ## Why this project exists
 
-CoreBank is a portfolio project focused on the engineering decisions behind transactional backend systems: explicit business rules, database invariants, ACID boundaries, concurrency control, error contracts, integration testing, and an incremental path toward event-driven architecture.
+CoreBank is a portfolio project focused on the engineering decisions behind transactional backend systems: business invariants, database guarantees, ACID boundaries, optimistic concurrency, accounting consistency, append-only audit records, reconciliation, integration testing and a deliberate path toward event-driven architecture.
 
 The goal is not to simulate every banking feature at once. Each release introduces one group of concerns and keeps them observable, testable and explainable in code review or technical interviews.
