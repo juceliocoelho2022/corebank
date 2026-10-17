@@ -55,15 +55,20 @@ public class OutboxPublicationWorker {
             return true;
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            log.warn(
-                    "Outbox publish interrupted eventId={} eventType={} aggregateId={} status=PENDING topic={}",
-                    event.getId(), event.getEventType(), event.getAggregateId(), topic);
+            logFailure("Outbox publish interrupted", event);
             throw new IllegalStateException("Interrupted while publishing outbox event", ex);
         } catch (JsonProcessingException | ExecutionException ex) {
-            log.warn(
-                    "Outbox publish failed eventId={} eventType={} aggregateId={} status=PENDING topic={}",
-                    event.getId(), event.getEventType(), event.getAggregateId(), topic);
+            logFailure("Outbox publish failed", event);
             throw new IllegalStateException("Could not publish outbox event", ex);
+        } catch (RuntimeException ex) {
+            logFailure("Outbox publish failed", event);
+            throw ex;
         }
+    }
+
+    private void logFailure(String message, OutboxEvent event) {
+        log.warn(
+                "{} eventId={} eventType={} aggregateId={} status=PENDING topic={}",
+                message, event.getId(), event.getEventType(), event.getAggregateId(), topic);
     }
 }
