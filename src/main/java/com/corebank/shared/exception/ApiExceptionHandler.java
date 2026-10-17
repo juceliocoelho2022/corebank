@@ -43,6 +43,13 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.BAD_REQUEST, problem);
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    ResponseEntity<ProblemDetail> handleIllegalArgument(IllegalArgumentException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Bad Request");
+        return problem(HttpStatus.BAD_REQUEST, problem);
+    }
+
     @ExceptionHandler(ResourceNotFoundException.class)
     ResponseEntity<ProblemDetail> handleNotFound(ResourceNotFoundException ex) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
