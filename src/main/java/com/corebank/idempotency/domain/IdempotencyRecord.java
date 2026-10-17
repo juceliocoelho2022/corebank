@@ -1,5 +1,6 @@
 package com.corebank.idempotency.domain;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -43,7 +44,7 @@ public class IdempotencyRecord {
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "response_body", columnDefinition = "jsonb")
-    private String responseBody;
+    private JsonNode responseBody;
 
     @Column(name = "http_status")
     private Integer httpStatus;
@@ -68,11 +69,11 @@ public class IdempotencyRecord {
         return new IdempotencyRecord(key, operation, requestHash);
     }
 
-    public void complete(UUID resourceId, int httpStatus, String responseBody) {
+    public void complete(UUID resourceId, int httpStatus, JsonNode responseBody) {
         if (status == IdempotencyStatus.COMPLETED) {
             throw new IllegalStateException("Idempotency record is already completed");
         }
-        if (responseBody == null) {
+        if (responseBody == null || responseBody.isNull()) {
             throw new IllegalArgumentException("responseBody must not be null");
         }
         if (httpStatus < 100 || httpStatus > 599) {
@@ -113,7 +114,7 @@ public class IdempotencyRecord {
     public String getRequestHash() { return requestHash; }
     public IdempotencyStatus getStatus() { return status; }
     public UUID getResourceId() { return resourceId; }
-    public String getResponseBody() { return responseBody; }
+    public JsonNode getResponseBody() { return responseBody; }
     public Integer getHttpStatus() { return httpStatus; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getCompletedAt() { return completedAt; }
