@@ -47,15 +47,14 @@ class LedgerServiceTest {
         clearing = withId(LedgerAccount.cashClearing(), UUID.randomUUID());
         accountId = UUID.randomUUID();
         customer = withId(LedgerAccount.customerLiability(accountId), UUID.randomUUID());
-
-        when(ledgerAccountRepository.findByCode("TECH:CASH_CLEARING")).thenReturn(Optional.of(clearing));
-        when(ledgerAccountRepository.findByAccountId(accountId)).thenReturn(Optional.of(customer));
-        when(journalEntryRepository.saveAndFlush(any(JournalEntry.class)))
-                .thenAnswer(invocation -> withId(invocation.getArgument(0), UUID.randomUUID()));
     }
 
     @Test
     void postDeposit_shouldDebitClearingAndCreditCustomerLiability() {
+        when(ledgerAccountRepository.findByCode("TECH:CASH_CLEARING")).thenReturn(Optional.of(clearing));
+        when(ledgerAccountRepository.findByAccountId(accountId)).thenReturn(Optional.of(customer));
+        stubJournalPersistence();
+
         UUID transactionId = UUID.randomUUID();
 
         JournalEntry journal = service.postDeposit(accountId, transactionId, new BigDecimal("100.00"), "deposit");
@@ -71,6 +70,10 @@ class LedgerServiceTest {
 
     @Test
     void postWithdrawal_shouldDebitCustomerLiabilityAndCreditClearing() {
+        when(ledgerAccountRepository.findByCode("TECH:CASH_CLEARING")).thenReturn(Optional.of(clearing));
+        when(ledgerAccountRepository.findByAccountId(accountId)).thenReturn(Optional.of(customer));
+        stubJournalPersistence();
+
         UUID transactionId = UUID.randomUUID();
 
         JournalEntry journal = service.postWithdrawal(accountId, transactionId, new BigDecimal("40.00"), "withdrawal");
@@ -88,7 +91,9 @@ class LedgerServiceTest {
     void postTransfer_shouldDebitSourceAndCreditDestinationCustomerLiability() {
         UUID destinationAccountId = UUID.randomUUID();
         LedgerAccount destination = withId(LedgerAccount.customerLiability(destinationAccountId), UUID.randomUUID());
+        when(ledgerAccountRepository.findByAccountId(accountId)).thenReturn(Optional.of(customer));
         when(ledgerAccountRepository.findByAccountId(destinationAccountId)).thenReturn(Optional.of(destination));
+        stubJournalPersistence();
 
         UUID transferId = UUID.randomUUID();
         JournalEntry journal = service.postTransfer(
@@ -115,6 +120,11 @@ class LedgerServiceTest {
 
         verify(journalEntryRepository, never()).saveAndFlush(any(JournalEntry.class));
         verify(ledgerEntryRepository, never()).saveAll(any());
+    }
+
+    private void stubJournalPersistence() {
+        when(journalEntryRepository.saveAndFlush(any(JournalEntry.class)))
+                .thenAnswer(invocation -> withId(invocation.getArgument(0), UUID.randomUUID()));
     }
 
     private List<LedgerEntry> capturedEntries() {
