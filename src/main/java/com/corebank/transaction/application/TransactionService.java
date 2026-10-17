@@ -2,6 +2,8 @@ package com.corebank.transaction.application;
 
 import com.corebank.account.domain.Account;
 import com.corebank.account.infrastructure.AccountRepository;
+import com.corebank.event.application.FinancialEventFactory;
+import com.corebank.event.application.OutboxService;
 import com.corebank.ledger.application.LedgerService;
 import com.corebank.shared.exception.ResourceNotFoundException;
 import com.corebank.transaction.domain.AccountTransaction;
@@ -20,13 +22,20 @@ public class TransactionService {
     private final AccountRepository accountRepository;
     private final AccountTransactionRepository transactionRepository;
     private final LedgerService ledgerService;
+    private final FinancialEventFactory eventFactory;
+    private final OutboxService outboxService;
 
-    public TransactionService(AccountRepository accountRepository,
-                              AccountTransactionRepository transactionRepository,
-                              LedgerService ledgerService) {
+    public TransactionService(
+            AccountRepository accountRepository,
+            AccountTransactionRepository transactionRepository,
+            LedgerService ledgerService,
+            FinancialEventFactory eventFactory,
+            OutboxService outboxService) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
         this.ledgerService = ledgerService;
+        this.eventFactory = eventFactory;
+        this.outboxService = outboxService;
     }
 
     @Transactional
@@ -41,6 +50,7 @@ public class TransactionService {
 
         ledgerService.postDeposit(
                 accountId, persisted.getId(), persisted.getAmount(), persisted.getDescription());
+        outboxService.record(eventFactory.depositCompleted(persisted));
 
         return persisted;
     }
@@ -57,6 +67,7 @@ public class TransactionService {
 
         ledgerService.postWithdrawal(
                 accountId, persisted.getId(), persisted.getAmount(), persisted.getDescription());
+        outboxService.record(eventFactory.withdrawalCompleted(persisted));
 
         return persisted;
     }
