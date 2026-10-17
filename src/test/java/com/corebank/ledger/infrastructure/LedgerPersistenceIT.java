@@ -52,8 +52,14 @@ class LedgerPersistenceIT {
         LedgerAccount saved = ledgerAccountRepository.saveAndFlush(
                 LedgerAccount.customerLiability(accountId));
 
-        assertThat(ledgerAccountRepository.findByAccountId(accountId))
-                .contains(saved);
+        LedgerAccount found = ledgerAccountRepository.findByAccountId(accountId)
+                .orElseThrow();
+
+        assertThat(found.getId()).isEqualTo(saved.getId());
+        assertThat(found.getAccountId()).isEqualTo(accountId);
+        assertThat(found.getType()).isEqualTo(LedgerAccountType.CUSTOMER_LIABILITY);
+        assertThat(found.getCode()).isEqualTo("CUSTOMER:" + accountId);
+        assertThat(found.getCurrency()).isEqualTo("BRL");
     }
 
     @Test
