@@ -16,7 +16,8 @@ class CachePropertiesTest {
                 .withProperty("corebank.cache.key-prefix", "corebank:v1:")
                 .withProperty("corebank.cache.summary-ttl", "5m")
                 .withProperty("corebank.cache.idempotency-replay-ttl", "1h");
-        CacheProperties config = Binder.get(env).bind("corebank.cache", CacheProperties.class).orElseThrow();
+        CacheProperties config = Binder.get(env).bind("corebank.cache", CacheProperties.class)
+                .orElseThrow(() -> new IllegalStateException("Cache properties not bound"));
         assertThat(config.keyPrefix()).isEqualTo("corebank:v1:");
         assertThat(config.summaryTtl()).isEqualTo(Duration.ofMinutes(5));
         assertThat(config.idempotencyReplayTtl()).isEqualTo(Duration.ofHours(1));
