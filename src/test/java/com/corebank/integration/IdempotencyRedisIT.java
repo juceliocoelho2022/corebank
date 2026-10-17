@@ -23,6 +23,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -129,7 +130,10 @@ class IdempotencyRedisIT extends RedisPostgresIntegrationSupport {
                 .andExpect(status().isCreated());
         long count = transactions.count();
 
-        redisCache.getConnectionFactory().getConnection().serverCommands().flushAll();
+        redisCache.execute((RedisCallback<Void>) connection -> {
+            connection.serverCommands().flushAll();
+            return null;
+        });
         mvc.perform(post("/api/v1/accounts/{id}/deposits", accountId)
                         .header("Idempotency-Key", raw)
                         .contentType(MediaType.APPLICATION_JSON)

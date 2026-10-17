@@ -74,7 +74,7 @@ Redis must never contain raw `Idempotency-Key` text, `response_body`, financial 
 Local prerequisites: Java 21, Maven 3.9+, Docker + Compose. Start dependencies:
 
 ```powershell
-docker compose up -d postgres kafka redis redis
+docker compose up -d postgres kafka redis
 mvn spring-boot:run
 ```
 
