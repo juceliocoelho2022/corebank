@@ -2,6 +2,7 @@ package com.corebank;
 
 import com.corebank.account.infrastructure.AccountRepository;
 import com.corebank.customer.infrastructure.CustomerRepository;
+import com.corebank.idempotency.infrastructure.IdempotencyLockRepository;
 import com.corebank.idempotency.infrastructure.IdempotencyRecordRepository;
 import com.corebank.ledger.infrastructure.JournalEntryRepository;
 import com.corebank.ledger.infrastructure.LedgerAccountRepository;
@@ -37,6 +38,9 @@ class CoreBankApplicationTest {
 
     @MockitoBean
     private IdempotencyRecordRepository idempotencyRecordRepository;
+
+    @MockitoBean
+    private IdempotencyLockRepository idempotencyLockRepository;
 
     @MockitoBean
     private JdbcTemplate jdbcTemplate;
