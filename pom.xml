@@ -13,7 +13,7 @@
 
     <groupId>com.corebank</groupId>
     <artifactId>corebank</artifactId>
-    <version>0.7.0</version>
+    <version>0.8.0</version>
     <name>CoreBank</name>
     <description>Banking as a Service portfolio backend</description>
 

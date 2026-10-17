@@ -1,10 +1,18 @@
 # CoreBank
 
-**CoreBank** is a production-oriented **Banking as a Service (BaaS)** backend built with Java 21 and Spring Boot. Version **0.7.0** adds durable Kafka retry scheduling and a transactionally safe **Dead Letter Queue (DLQ)** pipeline on top of the PostgreSQL Transactional Outbox introduced in v0.6.
+**CoreBank** is a production-oriented **Banking as a Service (BaaS)** backend built with Java 21 and Spring Boot. Version **0.8.0** adds a fail-open, ephemeral **Redis performance layer** for privacy-conscious Customer/Account summaries and completed idempotency replay pointers. Financial correctness continues to depend on PostgreSQL, never Redis.
 
 The project evolves release by release so each version demonstrates a focused set of backend engineering concerns without prematurely turning the system into a distributed architecture.
 
-## What v0.7 demonstrates
+## What v0.8 demonstrates
+
+- Redis 7 + Spring Cache for safe, five-minute Customer/Account summaries
+- Redis replay pointers for COMPLETED idempotency records (one-hour TTL)
+- SHA-256 Redis idempotency keys and explicit JSON payloads
+- AFTER_COMMIT-only population of new replay pointers
+- Redis fail-open on cache read/write/eviction errors
+- PostgreSQL remains authoritative for all financial state and replay bodies
+- Testcontainers integration tests for Redis, PostgreSQL and outage recovery
 
 - Java 21 + Spring Boot 3.5
 - Modular-monolith architecture
@@ -32,6 +40,49 @@ The project evolves release by release so each version demonstrates a focused se
 - Docker Compose
 - Swagger / OpenAPI
 - Actuator
+
+## v0.8: Redis cache with PostgreSQL authority
+
+> **Redis accelerates CoreBank; PostgreSQL guarantees CoreBank.**
+
+Redis is **optional and disposable**. The application must continue to serve requests and preserve all banking invariants if the Redis service is stopped, restarted or flushed. PostgreSQL remains the system of record for balances, ledger, financial transactions, idempotency records and locks, transactional outbox, and DLQ.
+
+Read-only cached projections:
+
+| Endpoint | Source / cache | Response data |
+|---|---|---|
+| `GET /api/v1/customers/{id}` | PostgreSQL | Existing complete Customer (may contain document/email) |
+| `GET /api/v1/customers/{id}/summary` | Redis cache-aside, 5 min; PostgreSQL fallback | id, name, createdAt; **never** document/email |
+| `GET /api/v1/accounts/{id}` | PostgreSQL | Existing complete Account including balance |
+| `GET /api/v1/accounts/{id}/balance` | PostgreSQL | Authoritative current balance |
+| `GET /api/v1/accounts/{id}/summary` | Redis cache-aside, 5 min; PostgreSQL fallback | id, customerId, branch, number, status, currency, createdAt; **never** balance |
+
+Cache values are dedicated JSON projections, not serialized JPA entities. A balance-changing deposit, withdrawal or transfer does not alter the account summary fields; it therefore does not invalidate that projection. Any future update to a projected field must evict the corresponding key **after** the PostgreSQL commit.
+
+Completed idempotency replay uses explicit Redis pointers, never a financial response cache:
+
+```text
+corebank:v1:customer-summary:{customerId}       TTL 5 minutes
+corebank:v1:account-summary:{accountId}         TTL 5 minutes
+corebank:v1:idempotency:{sha256(rawKey)}         TTL 1 hour
+```
+
+The idempotency pointer stores only `recordId`, `operation`, `requestHash`, `resourceId`, and `httpStatus`. Even on Redis HIT, CoreBank loads the matching PostgreSQL `IdempotencyRecord`, verifies the original key, operation, request hash, status and pointer metadata, and replays the **PostgreSQL** response. `IN_PROGRESS` and the advisory transaction lock remain PostgreSQL-only. New pointers are written after successful PostgreSQL commit via `AFTER_COMMIT` listener. On Redis MISS, corruption, timeout or full outage, CoreBank falls back safely to PostgreSQL.
+
+Redis must never contain raw `Idempotency-Key` text, `response_body`, financial balances, account history, customer document/email, financial payloads, ledger/outbox/DLQ state, or credentials. Cache errors log sanitized cache operation/type only, without serialized values or PII.
+
+Local prerequisites: Java 21, Maven 3.9+, Docker + Compose. Start dependencies:
+
+```powershell
+docker compose up -d postgres kafka redis redis
+mvn spring-boot:run
+```
+
+Default local connections: PostgreSQL `localhost:5432`, Kafka `localhost:9092`, Redis `localhost:6379`, API `localhost:8080`. Redis uses `redis:7-alpine` with a healthcheck and **no persistent volume**. Losing its content only causes cache misses. Redis has short 500 ms connection/operation timeouts by default; the Redis Actuator health contributor is excluded from global health, since it is not a mandatory availability dependency.
+
+Configuration through `REDIS_HOST`, `REDIS_PORT`, `corebank.cache.key-prefix`, `corebank.cache.summary-ttl` (default `5m`) and `corebank.cache.idempotency-replay-ttl` (default `1h`). Redis credentials must not be committed; environment-specific hardening (TLS/ACL) belongs to deployment work.
+
+**Release gate:** `mvn clean verify`. The feature branch is not a tested/released v0.8 build until fresh Maven output shows zero failures/errors and `BUILD SUCCESS`.
 
 ## Architecture
 
@@ -383,7 +434,7 @@ Prerequisites:
 - Maven 3.9+
 - Docker + Docker Compose
 
-Start PostgreSQL and Kafka:
+Start PostgreSQL, Kafka and Redis:
 
 ```bash
 docker compose up -d postgres kafka
@@ -400,6 +451,7 @@ Defaults:
 ```text
 PostgreSQL: localhost:5432
 Kafka:      localhost:9092
+Redis:      localhost:6379
 API:        localhost:8080
 ```
 
@@ -474,7 +526,7 @@ Flyway owns schema evolution; Hibernate validates the resulting schema.
 | v0.5 | Idempotency |
 | v0.6 | Kafka Events + Transactional Outbox |
 | **v0.7** | **Durable Retry + DLQ** |
-| v0.8 | Redis |
+| **v0.8** | **Redis (safe summaries + fail-open idempotency pointers)** |
 | v0.9 | JWT + RBAC |
 | v1.0 | Observability |
 | v1.1 | GitHub Actions |
