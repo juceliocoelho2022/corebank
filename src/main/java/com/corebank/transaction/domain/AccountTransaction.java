@@ -42,23 +42,58 @@ public class AccountTransaction {
     @Column(length = 200)
     private String description;
 
+    @Column(name = "transfer_id")
+    private UUID transferId;
+
+    @Column(name = "counterparty_account_id")
+    private UUID counterpartyAccountId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
     protected AccountTransaction() {
     }
 
-    public AccountTransaction(UUID accountId, TransactionType type, BigDecimal amount, BigDecimal balanceBefore, BigDecimal balanceAfter, String description) {
+    public AccountTransaction(UUID accountId, TransactionType type, BigDecimal amount,
+                              BigDecimal balanceBefore, BigDecimal balanceAfter, String description) {
+        this(accountId, type, amount, balanceBefore, balanceAfter, description, null, null);
+        if (type.isTransfer()) {
+            throw new IllegalArgumentException("Transfer transactions require transfer metadata");
+        }
+    }
+
+    private AccountTransaction(UUID accountId, TransactionType type, BigDecimal amount,
+                               BigDecimal balanceBefore, BigDecimal balanceAfter, String description,
+                               UUID transferId, UUID counterpartyAccountId) {
         this.accountId = require(accountId, "Account id is required");
         this.type = require(type, "Transaction type is required");
         this.amount = positiveMoney(amount, "Amount must be positive");
         this.balanceBefore = nonNegativeMoney(balanceBefore, "Balance before must be non-negative");
         this.balanceAfter = nonNegativeMoney(balanceAfter, "Balance after must be non-negative");
         this.description = normalizeDescription(description);
+        this.transferId = transferId;
+        this.counterpartyAccountId = counterpartyAccountId;
+    }
+
+    public static AccountTransaction transfer(UUID accountId, TransactionType type, BigDecimal amount,
+                                               BigDecimal balanceBefore, BigDecimal balanceAfter, String description,
+                                               UUID transferId, UUID counterpartyAccountId) {
+        if (type == null || !type.isTransfer()) {
+            throw new IllegalArgumentException("Transfer transaction type must be TRANSFER_OUT or TRANSFER_IN");
+        }
+        require(transferId, "Transfer id is required");
+        require(counterpartyAccountId, "Counterparty account id is required");
+        if (accountId != null && accountId.equals(counterpartyAccountId)) {
+            throw new IllegalArgumentException("Counterparty account must be different");
+        }
+        return new AccountTransaction(accountId, type, amount, balanceBefore, balanceAfter, description,
+                transferId, counterpartyAccountId);
     }
 
     @PrePersist
-    void onCreate() { if (createdAt == null) createdAt = Instant.now(); }
+    void onCreate() {
+        if (createdAt == null) createdAt = Instant.now();
+    }
 
     private static BigDecimal positiveMoney(BigDecimal value, String message) {
         BigDecimal normalized = nonNegativeMoney(value, message);
@@ -79,7 +114,10 @@ public class AccountTransaction {
         return trimmed;
     }
 
-    private static <T> T require(T value, String message) { if (value == null) throw new IllegalArgumentException(message); return value; }
+    private static <T> T require(T value, String message) {
+        if (value == null) throw new IllegalArgumentException(message);
+        return value;
+    }
 
     public UUID getId() { return id; }
     public UUID getAccountId() { return accountId; }
@@ -88,5 +126,7 @@ public class AccountTransaction {
     public BigDecimal getBalanceBefore() { return balanceBefore; }
     public BigDecimal getBalanceAfter() { return balanceAfter; }
     public String getDescription() { return description; }
+    public UUID getTransferId() { return transferId; }
+    public UUID getCounterpartyAccountId() { return counterpartyAccountId; }
     public Instant getCreatedAt() { return createdAt; }
 }
