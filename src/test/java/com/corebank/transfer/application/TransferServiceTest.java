@@ -149,8 +149,6 @@ class TransferServiceTest {
 
         Account source2 = account(sourceId, "10000010", "100.00");
         Account destination2 = account(destinationId, "10000011", "0.00");
-        when(accountRepository.findById(sourceId)).thenReturn(Optional.of(source2));
-        when(accountRepository.findById(destinationId)).thenReturn(Optional.of(destination2));
         assertThatThrownBy(() -> service().transfer(sourceId, destinationId, new BigDecimal("10.00"), "x".repeat(201)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(source2.getBalance()).isEqualByComparingTo("100.00");
