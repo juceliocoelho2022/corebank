@@ -2,6 +2,9 @@ package com.corebank;
 
 import com.corebank.account.infrastructure.AccountRepository;
 import com.corebank.customer.infrastructure.CustomerRepository;
+import com.corebank.ledger.infrastructure.JournalEntryRepository;
+import com.corebank.ledger.infrastructure.LedgerAccountRepository;
+import com.corebank.ledger.infrastructure.LedgerEntryRepository;
 import com.corebank.transaction.infrastructure.AccountTransactionRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -21,6 +24,15 @@ class CoreBankApplicationTest {
 
     @MockitoBean
     private AccountTransactionRepository accountTransactionRepository;
+
+    @MockitoBean
+    private LedgerAccountRepository ledgerAccountRepository;
+
+    @MockitoBean
+    private JournalEntryRepository journalEntryRepository;
+
+    @MockitoBean
+    private LedgerEntryRepository ledgerEntryRepository;
 
     @MockitoBean
     private JdbcTemplate jdbcTemplate;
