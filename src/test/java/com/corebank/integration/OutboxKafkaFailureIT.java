@@ -6,8 +6,10 @@ import com.corebank.account.infrastructure.AccountRepository;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.infrastructure.CustomerRepository;
 import com.corebank.event.domain.OutboxStatus;
+import com.corebank.event.infrastructure.DeadLetterEventRepository;
 import com.corebank.event.infrastructure.OutboxEventRepository;
 import com.corebank.event.infrastructure.OutboxPublisher;
+import org.apache.kafka.common.errors.TimeoutException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,6 +47,7 @@ class OutboxKafkaFailureIT {
     @Autowired AccountRepository accountRepository;
     @Autowired CustomerRepository customerRepository;
     @Autowired OutboxEventRepository outboxRepository;
+    @Autowired DeadLetterEventRepository deadLetterRepository;
     @Autowired OutboxPublisher publisher;
 
     @MockitoBean
@@ -54,6 +57,7 @@ class OutboxKafkaFailureIT {
 
     @BeforeEach
     void setUp() {
+        deadLetterRepository.deleteAll();
         outboxRepository.deleteAll();
         Customer customer = customerRepository.saveAndFlush(new Customer(
                 "Kafka Failure Customer",
@@ -64,7 +68,7 @@ class OutboxKafkaFailureIT {
     }
 
     @Test
-    void brokerFailureAfterFinancialCommit_shouldKeepFinanceCommittedAndOutboxPending() throws Exception {
+    void brokerFailureAfterFinancialCommit_shouldKeepFinanceCommittedAndScheduleRetry() throws Exception {
         mvc.perform(post("/api/v1/accounts/{accountId}/deposits", accountId)
                         .header("Idempotency-Key", "kafka-failure-" + UUID.randomUUID())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -77,15 +81,19 @@ class OutboxKafkaFailureIT {
         assertThat(event.getStatus()).isEqualTo(OutboxStatus.PENDING);
 
         CompletableFuture failed = new CompletableFuture();
-        failed.completeExceptionally(new IllegalStateException("broker unavailable"));
+        failed.completeExceptionally(new TimeoutException("broker unavailable"));
         when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenReturn(failed);
 
-        assertThat(publisher.publishPendingBatch()).isZero();
+        assertThat(publisher.publishPendingBatch()).isEqualTo(1);
 
+        var retried = outboxRepository.findById(event.getId()).orElseThrow();
         assertThat(accountRepository.findById(accountId).orElseThrow().getBalance())
                 .isEqualByComparingTo("100.00");
-        assertThat(outboxRepository.findById(event.getId()).orElseThrow().getStatus())
-                .isEqualTo(OutboxStatus.PENDING);
-        assertThat(outboxRepository.findById(event.getId()).orElseThrow().getPublishedAt()).isNull();
+        assertThat(retried.getStatus()).isEqualTo(OutboxStatus.PENDING);
+        assertThat(retried.getAttemptCount()).isEqualTo(1);
+        assertThat(retried.getLastErrorType()).isEqualTo("TimeoutException");
+        assertThat(retried.getLastErrorMessage()).isEqualTo("Transient Kafka publication failure");
+        assertThat(retried.getPublishedAt()).isNull();
+        assertThat(deadLetterRepository.count()).isZero();
     }
 }

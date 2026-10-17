@@ -43,12 +43,28 @@ corebank:
   kafka:
     topic:
       financial-events: corebank.financial-events.v1
+      financial-events-dlq: corebank.financial-events.dlq.v1
   outbox:
     batch-size: 100
     fixed-delay-ms: 2000
+    max-attempts: 5
+    retry-delays:
+      - 2s
+      - 5s
+      - 15s
+      - 30s
+  dlq:
+    batch-size: 100
+    fixed-delay-ms: 2000
+    retry-delays:
+      - 5s
+      - 15s
+      - 30s
+      - 60s
+    max-delay: 60s
 
 info:
   app:
     name: CoreBank
-    version: 0.6.0
+    version: 0.7.0
     description: Banking as a Service portfolio backend

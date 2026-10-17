@@ -18,18 +18,22 @@ public class OutboxPublisher {
     }
 
     public int publishPendingBatch() {
-        int published = 0;
+        int handled = 0;
         for (int i = 0; i < properties.batchSize(); i++) {
             try {
                 if (!worker.publishNext()) {
                     break;
                 }
-                published++;
+                handled++;
+                if (Thread.currentThread().isInterrupted()) {
+                    log.warn("Stopping current outbox batch because publisher thread was interrupted");
+                    break;
+                }
             } catch (RuntimeException ex) {
-                log.warn("Stopping current outbox batch after publication failure");
+                log.warn("Stopping current outbox batch because publication state could not be persisted safely", ex);
                 break;
             }
         }
-        return published;
+        return handled;
     }
 }

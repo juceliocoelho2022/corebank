@@ -36,7 +36,7 @@ class OutboxMigrationIT {
     }
 
     @Test
-    void migration_shouldCreateOutboxTableAndPartialPendingIndex() {
+    void migration_shouldCreateOutboxTableAndCurrentPendingIndex() {
         migrateLatest();
 
         Integer tableCount = jdbc.queryForObject("""
@@ -49,8 +49,8 @@ class OutboxMigrationIT {
                 FROM pg_indexes
                 WHERE schemaname = 'public'
                   AND tablename = 'outbox_events'
-                  AND indexname = 'idx_outbox_pending_created_at'
-                  AND indexdef ILIKE '%WHERE%'
+                  AND indexname = 'idx_outbox_pending_next_attempt'
+                  AND indexdef ILIKE '%next_attempt_at%'
                   AND indexdef ILIKE '%PENDING%'
                 """, Integer.class);
 
@@ -71,36 +71,40 @@ class OutboxMigrationIT {
                 .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> insert(UUID.randomUUID(), "DEPOSIT_COMPLETED", 1, "PUBLISHED", null))
                 .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> insert(UUID.randomUUID(), "DEPOSIT_COMPLETED", 1, "DEAD_LETTERED", now))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    void database_shouldAcceptValidPendingAndPublishedRows() {
+    void database_shouldAcceptValidPendingPublishedAndDeadLetteredRows() {
         migrateLatest();
         Instant now = Instant.now();
 
         assertThat(insert(UUID.randomUUID(), "DEPOSIT_COMPLETED", 1, "PENDING", null)).isEqualTo(1);
         assertThat(insert(UUID.randomUUID(), "TRANSFER_COMPLETED", 1, "PUBLISHED", now)).isEqualTo(1);
+        assertThat(insert(UUID.randomUUID(), "WITHDRAWAL_COMPLETED", 1, "DEAD_LETTERED", null)).isEqualTo(1);
     }
 
     private int insert(UUID id, String eventType, int version, String status, Instant publishedAt) {
         UUID aggregateId = UUID.randomUUID();
-        UUID correlationId = UUID.randomUUID();
+        Instant createdAt = Instant.now();
         return jdbc.update("""
                 INSERT INTO outbox_events
                     (id, event_type, event_version, aggregate_type, aggregate_id, correlation_id,
-                     message_key, payload, status, created_at, published_at)
-                VALUES (?, ?, ?, 'ACCOUNT', ?, ?, ?, CAST(? AS jsonb), ?, ?, ?)
+                     message_key, payload, status, created_at, published_at, attempt_count, next_attempt_at)
+                VALUES (?, ?, ?, 'ACCOUNT', ?, ?, ?, CAST(? AS jsonb), ?, ?, ?, 0, ?)
                 """,
                 id,
                 eventType,
                 version,
                 aggregateId,
-                correlationId,
+                UUID.randomUUID(),
                 aggregateId.toString(),
                 "{\"amount\":100.00,\"currency\":\"BRL\"}",
                 status,
-                Timestamp.from(Instant.now()),
-                publishedAt == null ? null : Timestamp.from(publishedAt));
+                Timestamp.from(createdAt),
+                publishedAt == null ? null : Timestamp.from(publishedAt),
+                Timestamp.from(createdAt));
     }
 
     private void migrateLatest() {
