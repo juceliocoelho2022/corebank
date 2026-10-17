@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -30,12 +31,13 @@ class LedgerPersistenceIT {
     @Autowired LedgerAccountRepository ledgerAccountRepository;
     @Autowired AccountRepository accountRepository;
     @Autowired CustomerRepository customerRepository;
+    @Autowired JdbcTemplate jdbcTemplate;
 
     private UUID accountId;
 
     @BeforeEach
     void setUp() {
-        ledgerAccountRepository.deleteAll();
+        jdbcTemplate.update("DELETE FROM ledger_accounts WHERE type = 'CUSTOMER_LIABILITY'");
         accountRepository.deleteAll();
         customerRepository.deleteAll();
 
