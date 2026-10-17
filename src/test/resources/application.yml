@@ -1,0 +1,9 @@
+spring:
+  kafka:
+    admin:
+      auto-create: false
+
+corebank:
+  outbox:
+    batch-size: 100
+    fixed-delay-ms: 600000
