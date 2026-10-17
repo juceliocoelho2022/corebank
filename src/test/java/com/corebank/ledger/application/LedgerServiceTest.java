@@ -111,7 +111,6 @@ class LedgerServiceTest {
     @Test
     void missingCustomerLedgerAccount_shouldFailBeforeJournalPersistence() {
         UUID missingAccountId = UUID.randomUUID();
-        when(ledgerAccountRepository.findByAccountId(missingAccountId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.postDeposit(
                 missingAccountId, UUID.randomUUID(), new BigDecimal("10.00"), "deposit"))
