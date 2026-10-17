@@ -60,7 +60,7 @@ class TransferControllerTest {
     void invalidPayload_shouldReturn400() throws Exception {
         mvc.perform(post("/api/v1/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""{"amount":0.00}"""))
+                        .content("{\"amount\":0.00}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
     }
@@ -72,7 +72,7 @@ class TransferControllerTest {
                 .thenThrow(new IllegalArgumentException("Source and destination accounts must be different"));
         mvc.perform(post("/api/v1/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""{"sourceAccountId":"%s","destinationAccountId":"%s","amount":10.00}""".formatted(id, id)))
+                        .content("{\"sourceAccountId\":\"%s\",\"destinationAccountId\":\"%s\",\"amount\":10.00}".formatted(id, id)))
                 .andExpect(status().isBadRequest());
     }
 
@@ -84,7 +84,7 @@ class TransferControllerTest {
                 .thenThrow(new ResourceNotFoundException("Destination account not found"));
         mvc.perform(post("/api/v1/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""{"sourceAccountId":"%s","destinationAccountId":"%s","amount":10.00}""".formatted(sourceId, destinationId)))
+                        .content("{\"sourceAccountId\":\"%s\",\"destinationAccountId\":\"%s\",\"amount\":10.00}".formatted(sourceId, destinationId)))
                 .andExpect(status().isNotFound());
     }
 
@@ -96,7 +96,7 @@ class TransferControllerTest {
                 .thenThrow(new InsufficientBalanceException());
         mvc.perform(post("/api/v1/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""{"sourceAccountId":"%s","destinationAccountId":"%s","amount":80.00}""".formatted(sourceId, destinationId)))
+                        .content("{\"sourceAccountId\":\"%s\",\"destinationAccountId\":\"%s\",\"amount\":80.00}".formatted(sourceId, destinationId)))
                 .andExpect(status().isConflict());
     }
 
@@ -108,7 +108,7 @@ class TransferControllerTest {
                 .thenThrow(new ObjectOptimisticLockingFailureException("Account", sourceId));
         mvc.perform(post("/api/v1/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""{"sourceAccountId":"%s","destinationAccountId":"%s","amount":10.00}""".formatted(sourceId, destinationId)))
+                        .content("{\"sourceAccountId\":\"%s\",\"destinationAccountId\":\"%s\",\"amount\":10.00}".formatted(sourceId, destinationId)))
                 .andExpect(status().isConflict());
     }
 
