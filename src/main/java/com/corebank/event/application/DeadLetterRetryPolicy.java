@@ -18,8 +18,12 @@ public class DeadLetterRetryPolicy {
         if (publishAttempts < 1) {
             throw new IllegalArgumentException("publishAttempts must be at least 1");
         }
-        int index = Math.min(publishAttempts - 1, properties.retryDelays().size() - 1);
-        Duration configured = properties.retryDelays().get(index);
-        return configured.compareTo(properties.maxDelay()) > 0 ? properties.maxDelay() : configured;
+        if (publishAttempts > properties.retryDelays().size()) {
+            return properties.maxDelay();
+        }
+        Duration configured = properties.retryDelays().get(publishAttempts - 1);
+        return configured.compareTo(properties.maxDelay()) > 0
+                ? properties.maxDelay()
+                : configured;
     }
 }
