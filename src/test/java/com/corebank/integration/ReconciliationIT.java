@@ -19,6 +19,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -72,7 +73,7 @@ class ReconciliationIT {
         UUID clearingId = jdbcTemplate.queryForObject(
                 "SELECT id FROM ledger_accounts WHERE code = 'TECH:CASH_CLEARING'",
                 UUID.class);
-        Instant now = Instant.now();
+        Timestamp now = Timestamp.from(Instant.now());
 
         jdbcTemplate.update("""
                 INSERT INTO accounts
