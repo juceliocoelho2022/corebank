@@ -1,5 +1,7 @@
 package com.corebank.idempotency.domain;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
@@ -43,7 +45,8 @@ class IdempotencyRecordTest {
         IdempotencyRecord record = IdempotencyRecord.start(
                 "deposit-123", IdempotencyOperation.DEPOSIT, HASH);
         UUID resourceId = UUID.randomUUID();
-        String responseBody = "{\"transactionId\":\"" + resourceId + "\"}";
+        JsonNode responseBody = JsonNodeFactory.instance.objectNode()
+                .put("transactionId", resourceId.toString());
 
         record.complete(resourceId, 201, responseBody);
 
@@ -58,9 +61,10 @@ class IdempotencyRecordTest {
     void complete_shouldRejectSecondCompletion() {
         IdempotencyRecord record = IdempotencyRecord.start(
                 "deposit-456", IdempotencyOperation.DEPOSIT, HASH);
-        record.complete(UUID.randomUUID(), 201, "{}");
+        record.complete(UUID.randomUUID(), 201, JsonNodeFactory.instance.objectNode());
 
-        assertThatThrownBy(() -> record.complete(UUID.randomUUID(), 201, "{}"))
+        assertThatThrownBy(() -> record.complete(
+                UUID.randomUUID(), 201, JsonNodeFactory.instance.objectNode()))
                 .isInstanceOf(IllegalStateException.class);
     }
 
