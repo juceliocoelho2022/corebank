@@ -54,6 +54,18 @@ public class OutboxEvent {
     @Column(name = "published_at")
     private Instant publishedAt;
 
+    @Column(name = "attempt_count", nullable = false)
+    private int attemptCount;
+
+    @Column(name = "next_attempt_at", nullable = false)
+    private Instant nextAttemptAt;
+
+    @Column(name = "last_error_type", length = 128)
+    private String lastErrorType;
+
+    @Column(name = "last_error_message", length = 500)
+    private String lastErrorMessage;
+
     protected OutboxEvent() {
     }
 
@@ -83,7 +95,10 @@ public class OutboxEvent {
         }
         this.payload = payload.deepCopy();
         this.status = OutboxStatus.PENDING;
-        this.createdAt = Instant.now();
+        Instant now = Instant.now();
+        this.createdAt = now;
+        this.attemptCount = 0;
+        this.nextAttemptAt = now;
     }
 
     public static OutboxEvent pending(
@@ -104,12 +119,29 @@ public class OutboxEvent {
                 payload);
     }
 
+    public void recordRetriableFailure(String errorType, String errorMessage, Instant nextAttemptAt) {
+        requirePending();
+        this.attemptCount++;
+        this.lastErrorType = boundedRequiredText(errorType, "errorType", 128);
+        this.lastErrorMessage = boundedNullableText(errorMessage, 500);
+        this.nextAttemptAt = Objects.requireNonNull(nextAttemptAt, "nextAttemptAt must not be null");
+    }
+
     public void markPublished(Instant publishedAt) {
-        if (status == OutboxStatus.PUBLISHED) {
-            throw new IllegalStateException("Outbox event is already published");
-        }
+        requirePending();
         this.publishedAt = Objects.requireNonNull(publishedAt, "publishedAt must not be null");
         this.status = OutboxStatus.PUBLISHED;
+        this.lastErrorType = null;
+        this.lastErrorMessage = null;
+    }
+
+    public void markDeadLettered(String errorType, String errorMessage) {
+        requirePending();
+        this.attemptCount++;
+        this.lastErrorType = boundedRequiredText(errorType, "errorType", 128);
+        this.lastErrorMessage = boundedNullableText(errorMessage, 500);
+        this.status = OutboxStatus.DEAD_LETTERED;
+        this.publishedAt = null;
     }
 
     public FinancialEventEnvelope toEnvelope() {
@@ -124,11 +156,33 @@ public class OutboxEvent {
                 payload.deepCopy());
     }
 
+    private void requirePending() {
+        if (status != OutboxStatus.PENDING) {
+            throw new IllegalStateException("Outbox event is terminal: " + status);
+        }
+    }
+
     private static String requireText(String value, String field) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(field + " must not be blank");
         }
         return value;
+    }
+
+    private static String boundedRequiredText(String value, String field, int maxLength) {
+        String text = requireText(value, field);
+        return text.length() <= maxLength ? text : text.substring(0, maxLength);
+    }
+
+    private static String boundedNullableText(String value, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.replace('\r', ' ').replace('\n', ' ').trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
     }
 
     public UUID getId() { return id; }
@@ -142,4 +196,8 @@ public class OutboxEvent {
     public OutboxStatus getStatus() { return status; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getPublishedAt() { return publishedAt; }
+    public int getAttemptCount() { return attemptCount; }
+    public Instant getNextAttemptAt() { return nextAttemptAt; }
+    public String getLastErrorType() { return lastErrorType; }
+    public String getLastErrorMessage() { return lastErrorMessage; }
 }
