@@ -3,6 +3,8 @@ package com.corebank.transfer.application;
 import com.corebank.account.domain.Account;
 import com.corebank.account.domain.AccountStatus;
 import com.corebank.account.infrastructure.AccountRepository;
+import com.corebank.event.application.FinancialEventFactory;
+import com.corebank.event.application.OutboxService;
 import com.corebank.ledger.application.LedgerService;
 import com.corebank.shared.exception.InvalidAccountStateException;
 import com.corebank.shared.exception.ResourceNotFoundException;
@@ -23,13 +25,20 @@ public class TransferService {
     private final AccountRepository accountRepository;
     private final AccountTransactionRepository transactionRepository;
     private final LedgerService ledgerService;
+    private final FinancialEventFactory eventFactory;
+    private final OutboxService outboxService;
 
-    public TransferService(AccountRepository accountRepository,
-                           AccountTransactionRepository transactionRepository,
-                           LedgerService ledgerService) {
+    public TransferService(
+            AccountRepository accountRepository,
+            AccountTransactionRepository transactionRepository,
+            LedgerService ledgerService,
+            FinancialEventFactory eventFactory,
+            OutboxService outboxService) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
         this.ledgerService = ledgerService;
+        this.eventFactory = eventFactory;
+        this.outboxService = outboxService;
     }
 
     @Transactional
@@ -72,6 +81,12 @@ public class TransferService {
                 transferId,
                 normalizedAmount,
                 normalizedDescription);
+
+        outboxService.record(eventFactory.transferCompleted(
+                transferId,
+                sourceAccountId,
+                destinationAccountId,
+                normalizedAmount));
 
         return new TransferResult(
                 transferId,

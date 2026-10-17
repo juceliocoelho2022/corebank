@@ -2,6 +2,8 @@ package com.corebank.transaction.application;
 
 import com.corebank.account.domain.Account;
 import com.corebank.account.infrastructure.AccountRepository;
+import com.corebank.event.application.FinancialEventFactory;
+import com.corebank.event.application.OutboxService;
 import com.corebank.ledger.application.LedgerService;
 import com.corebank.shared.exception.InsufficientBalanceException;
 import com.corebank.shared.exception.ResourceNotFoundException;
@@ -34,6 +36,8 @@ class TransactionServiceTest {
     @Mock AccountRepository accountRepository;
     @Mock AccountTransactionRepository transactionRepository;
     @Mock LedgerService ledgerService;
+    @Mock FinancialEventFactory eventFactory;
+    @Mock OutboxService outboxService;
 
     @Test
     void successfulDeposit_shouldPersistHistoryBeforePostingLedgerWithTransactionId() {
@@ -143,7 +147,12 @@ class TransactionServiceTest {
     }
 
     private TransactionService service() {
-        return new TransactionService(accountRepository, transactionRepository, ledgerService);
+        return new TransactionService(
+                accountRepository,
+                transactionRepository,
+                ledgerService,
+                eventFactory,
+                outboxService);
     }
 
     private Account accountWithId(UUID id) {

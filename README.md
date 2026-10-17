@@ -1,35 +1,35 @@
 # CoreBank
 
-**CoreBank** is a production-oriented **Banking as a Service (BaaS)** portfolio backend built with Java 21 and Spring Boot. Version **0.5.0** adds persistent HTTP idempotency to deposits, withdrawals and internal transfers while preserving the ACID financial model, immutable transaction history, double-entry ledger, reconciliation and optimistic concurrency controls from previous releases.
+**CoreBank** is a production-oriented **Banking as a Service (BaaS)** backend built with Java 21 and Spring Boot. Version **0.6.0** introduces asynchronous financial events with **Apache Kafka** using a **PostgreSQL Transactional Outbox**, while preserving the ACID money-movement, idempotency, double-entry ledger, reconciliation and optimistic-concurrency guarantees implemented in previous releases.
 
-The project evolves release by release so each version demonstrates one group of backend engineering concerns before introducing distributed-system complexity.
+CoreBank evolves release by release so each version demonstrates one group of backend engineering concerns without prematurely turning the project into a distributed system.
 
-## What v0.5 demonstrates
+## What v0.6 demonstrates
 
-- Java 21 and Spring Boot 3.5
+- Java 21 + Spring Boot 3.5
 - Modular-monolith architecture
 - PostgreSQL + Spring Data JPA
 - Flyway migrations
-- ACID money movements
-- Deposits, withdrawals and internal transfers
+- ACID deposits, withdrawals and internal transfers
 - Immutable transaction history
 - Immutable double-entry ledger
-- Operational balance × ledger reconciliation
+- Operational-balance × ledger reconciliation
 - Optimistic locking with JPA `@Version`
-- Persistent idempotency records in PostgreSQL
-- Mandatory `Idempotency-Key` on financial POST endpoints
-- Canonical SHA-256 request fingerprinting
-- Exact replay of completed responses without duplicate financial effects
-- Global key uniqueness in v0.5
-- Non-blocking cross-instance concurrency guard with PostgreSQL advisory locks
-- JSONB response persistence
-- RFC 9457-style `ProblemDetail` errors
-- Swagger / OpenAPI
-- Actuator
-- Unit, MVC, persistence, integration and concurrency tests
-- Testcontainers PostgreSQL
+- Persistent HTTP idempotency
+- Apache Kafka integration
+- PostgreSQL Transactional Outbox
+- At-least-once event publication
+- PostgreSQL `FOR UPDATE SKIP LOCKED` for concurrent publishers
+- Versioned event envelopes
+- Explicit Kafka message keys
+- JSONB outbox payload persistence
+- Scheduler-based publication
+- Testcontainers PostgreSQL + Kafka
+- JUnit 5 / Mockito / MockMvc
 - JaCoCo
 - Docker Compose
+- Swagger / OpenAPI
+- Actuator
 
 ## Architecture
 
@@ -42,6 +42,7 @@ com.corebank
 ├── ledger
 ├── reconciliation
 ├── idempotency
+├── event
 │   ├── domain
 │   ├── application
 │   └── infrastructure
@@ -49,11 +50,21 @@ com.corebank
 └── CoreBankApplication
 ```
 
-CoreBank remains a **modular monolith** in v0.5. `accounts.balance` is the operational balance used by business flows. The double-entry ledger remains the immutable accounting record used for auditability and reconciliation.
+CoreBank remains a **modular monolith** in v0.6. Kafka is an asynchronous integration boundary; it is not the source of truth for balances or accounting.
 
-## Financial model
+## Financial consistency model
 
-Successful operations remain atomic.
+CoreBank continues to use:
+
+```text
+accounts.balance
+```
+
+as the operational balance used by business flows.
+
+The immutable double-entry ledger remains the accounting record used for auditability and reconciliation.
+
+A successful operation still updates its financial records atomically.
 
 ### Deposit
 
@@ -62,6 +73,7 @@ accounts.balance          + amount
 account_transactions      + 1 DEPOSIT
 journal_entries           + 1
 ledger_entries            + 2
+outbox_events             + 1 DEPOSIT_COMPLETED
 ```
 
 Accounting entry:
@@ -78,6 +90,8 @@ DEBIT   CUSTOMER_LIABILITY(account)
 CREDIT  TECH:CASH_CLEARING
 ```
 
+A successful withdrawal creates one `WITHDRAWAL_COMPLETED` outbox event.
+
 ### Internal transfer
 
 ```text
@@ -85,257 +99,452 @@ DEBIT   CUSTOMER_LIABILITY(source)
 CREDIT  CUSTOMER_LIABILITY(destination)
 ```
 
-A transfer creates one `TRANSFER_OUT`, one `TRANSFER_IN`, one journal and two ledger entries.
-
-## Idempotency in v0.5
-
-The following endpoints require an `Idempotency-Key` header:
-
-```http
-POST /api/v1/accounts/{accountId}/deposits
-POST /api/v1/accounts/{accountId}/withdrawals
-POST /api/v1/transfers
-```
-
-Key rules:
+A transfer creates:
 
 ```text
-length: 8..128 characters
-opaque and case-sensitive
-globally unique in v0.5
+1 TRANSFER_OUT
+1 TRANSFER_IN
+1 accounting journal
+2 ledger entries
+1 TRANSFER_COMPLETED outbox event
 ```
 
-Example:
+It does **not** create two Kafka events merely because two transaction-history rows exist.
 
-```http
-POST /api/v1/accounts/11111111-1111-1111-1111-111111111111/deposits
-Idempotency-Key: salary-2026-10-17-001
-Content-Type: application/json
+## Why Transactional Outbox
 
-{
-  "amount": 100.00,
-  "description": "Salary"
-}
-```
-
-First execution:
-
-```http
-HTTP/1.1 201 Created
-Idempotent-Replayed: false
-```
-
-Exact retry with the same semantic request:
-
-```http
-HTTP/1.1 201 Created
-Idempotent-Replayed: true
-```
-
-The second request returns the persisted original response and does **not** create another balance change, transaction-history row, journal or ledger entry.
-
-## Canonical request fingerprinting
-
-CoreBank hashes semantic request values rather than raw JSON.
-
-For money:
+Publishing directly to Kafka inside a financial request would create a dual-write problem:
 
 ```text
-100
-100.0
-100.00
+PostgreSQL commit succeeds
+Kafka send fails
 ```
 
-all normalize to the same canonical monetary value before SHA-256 hashing.
-
-Descriptions use the normalized business value: padded text is trimmed and blank text is treated as `null`.
-
-Fingerprints include the operation and all identity-defining request fields:
+or:
 
 ```text
-DEPOSIT    -> accountId + amount + description
-WITHDRAWAL -> accountId + amount + description
-TRANSFER   -> sourceAccountId + destinationAccountId + amount + description
+Kafka accepts event
+PostgreSQL transaction rolls back
 ```
 
-## Persistence model
-
-Migration `V5__create_idempotency_records.sql` creates:
-
-```text
-idempotency_records
-├── id UUID
-├── idempotency_key VARCHAR(128) UNIQUE
-├── operation_type DEPOSIT|WITHDRAWAL|TRANSFER
-├── request_hash VARCHAR(64)
-├── status IN_PROGRESS|COMPLETED
-├── resource_id UUID
-├── response_body JSONB
-├── http_status INTEGER
-├── created_at TIMESTAMPTZ
-└── completed_at TIMESTAMPTZ
-```
-
-`COMPLETED` rows persist the original HTTP status and response body for deterministic replay.
-
-There is no TTL or cleanup scheduler in v0.5. Idempotency records persist indefinitely so an old financial request cannot be re-executed merely because its key expired.
-
-## Idempotency conflict semantics
-
-### `400 Bad Request`
-
-Returned for:
-
-- missing `Idempotency-Key`;
-- key shorter than 8 characters;
-- key longer than 128 characters;
-- malformed request input.
-
-### `409 Conflict`
-
-Returned when:
-
-- a key is reused for a different operation;
-- a key is reused with a different canonical request fingerprint;
-- the same key is already executing and the concurrency lock cannot be acquired.
-
-## Concurrency model
-
-The database remains the correctness authority.
-
-Each new idempotent execution uses PostgreSQL:
-
-```sql
-pg_try_advisory_xact_lock(hashtextextended(:key, 0))
-```
-
-This lock is:
-
-- transaction-scoped;
-- non-blocking;
-- effective across application instances sharing the database.
-
-If the same key is already in progress, the second request fails fast with `409 Conflict` instead of waiting or polling.
-
-The `UNIQUE(idempotency_key)` constraint remains the structural database guarantee.
-
-## Atomicity and rollback
-
-The idempotency reservation and the financial command participate in the same Spring transaction.
+CoreBank v0.6 avoids that coupling by making PostgreSQL the atomic boundary.
 
 Conceptually:
 
 ```text
-BEGIN
-  acquire same-key advisory lock
-  insert idempotency_records IN_PROGRESS
-  update account balance(s)
-  insert account_transactions
-  insert journal_entries
-  insert ledger_entries
-  persist original JSON response
-  mark idempotency record COMPLETED
-COMMIT
+HTTP request
+   ↓
+IdempotencyService
+   ↓
+TransactionService / TransferService
+   ↓
+PostgreSQL transaction
+   ├── account balance(s)
+   ├── account_transactions
+   ├── journal_entries
+   ├── ledger_entries
+   ├── idempotency_records
+   └── outbox_events PENDING
+            ↓
+          COMMIT
+            ↓
+      OutboxScheduler
+            ↓
+      OutboxPublisher
+            ↓
+          Kafka
 ```
 
-If the business command or ledger persistence fails, the whole transaction rolls back, including the `IN_PROGRESS` idempotency row and any partial financial writes.
-
-## Reconciliation
-
-```http
-GET /api/v1/reconciliation/accounts/{accountId}
-```
-
-For customer-liability ledger accounts:
+Core invariant:
 
 ```text
-ledger balance = credits - debits
-difference = operational balance - ledger balance
+financial commit => durable outbox event
 ```
 
-Statuses:
+Kafka availability is deliberately **not** part of the financial HTTP transaction.
+
+## Outbox persistence
+
+Migration `V6__create_outbox_events.sql` creates:
 
 ```text
-RECONCILED
-MISMATCH
+outbox_events
+├── id UUID PK
+├── event_type VARCHAR(64)
+├── event_version INTEGER
+├── aggregate_type VARCHAR(64)
+├── aggregate_id UUID
+├── correlation_id UUID
+├── message_key VARCHAR(128)
+├── payload JSONB
+├── status PENDING|PUBLISHED
+├── created_at TIMESTAMPTZ
+└── published_at TIMESTAMPTZ NULL
 ```
 
-A mismatch is reported only; CoreBank does not auto-correct either side.
+The database enforces:
 
-## Main APIs
-
-### Customers
-
-```http
-POST /api/v1/customers
+```text
+event_version >= 1
+status ∈ {PENDING, PUBLISHED}
+PENDING   => published_at IS NULL
+PUBLISHED => published_at IS NOT NULL
 ```
 
-### Accounts
+A partial index supports pending-event polling:
 
-```http
-POST /api/v1/accounts
-GET  /api/v1/accounts/{accountId}
-GET  /api/v1/accounts/{accountId}/balance
+```sql
+CREATE INDEX idx_outbox_pending_created_at
+ON outbox_events (created_at)
+WHERE status = 'PENDING';
 ```
 
-### Deposits / withdrawals
+`outbox_events.id` is the same UUID exposed externally as `eventId`.
+
+## Financial events
+
+v0.6 defines exactly three event types:
+
+```text
+DEPOSIT_COMPLETED
+WITHDRAWAL_COMPLETED
+TRANSFER_COMPLETED
+```
+
+### Event envelope
+
+```json
+{
+  "eventId": "uuid",
+  "eventType": "TRANSFER_COMPLETED",
+  "eventVersion": 1,
+  "occurredAt": "2026-10-17T15:40:00Z",
+  "aggregateType": "TRANSFER",
+  "aggregateId": "uuid",
+  "correlationId": "uuid",
+  "payload": {}
+}
+```
+
+Semantics:
+
+- `eventId` identifies the event instance and can be used for consumer deduplication;
+- `eventType` identifies the business event;
+- `eventVersion` versions the event contract;
+- `occurredAt` is the UTC event timestamp;
+- `aggregateId` identifies the principal business aggregate;
+- `correlationId` identifies the originating financial operation;
+- `payload` contains only the required integration data.
+
+JPA entities are never serialized directly as Kafka contracts.
+
+### Deposit payload
+
+```json
+{
+  "accountId": "uuid",
+  "transactionId": "uuid",
+  "amount": 100.00,
+  "currency": "BRL"
+}
+```
+
+### Withdrawal payload
+
+```json
+{
+  "accountId": "uuid",
+  "transactionId": "uuid",
+  "amount": 50.00,
+  "currency": "BRL"
+}
+```
+
+### Transfer payload
+
+```json
+{
+  "transferId": "uuid",
+  "sourceAccountId": "uuid",
+  "destinationAccountId": "uuid",
+  "amount": 125.00,
+  "currency": "BRL"
+}
+```
+
+The events intentionally exclude customer name/e-mail/document, credentials, balances, original HTTP bodies, `Idempotency-Key`, stack traces and free-form transaction descriptions.
+
+## Kafka topology
+
+Topic:
+
+```text
+corebank.financial-events.v1
+```
+
+Local topology:
+
+```text
+partitions = 3
+replication-factor = 1
+```
+
+Kafka message keys:
+
+```text
+DEPOSIT_COMPLETED    -> accountId
+WITHDRAWAL_COMPLETED -> accountId
+TRANSFER_COMPLETED   -> sourceAccountId
+```
+
+The message key is persisted in `outbox_events.message_key`; the publisher does not need to inspect JSON to discover partitioning information.
+
+## Publisher concurrency
+
+The publisher claims one event at a time using PostgreSQL locking equivalent to:
+
+```sql
+SELECT *
+FROM outbox_events
+WHERE status = 'PENDING'
+ORDER BY created_at
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+```
+
+This allows multiple CoreBank instances to run publishers concurrently without JVM-local locking.
+
+Example:
+
+```text
+Instance A locks event 1
+Instance B skips event 1 and claims event 2
+```
+
+Each claimed event runs in its own `REQUIRES_NEW` transaction.
+
+## Kafka acknowledgement and outbox state
+
+The lifecycle is:
+
+```text
+PENDING
+  ↓
+KafkaTemplate.send(...)
+  ↓
+Kafka ACK
+  ↓
+PUBLISHED + published_at
+```
+
+CoreBank never marks an event `PUBLISHED` before the broker acknowledges the send.
+
+If serialization, send or acknowledgement fails, the publisher transaction rolls back and the event remains:
+
+```text
+PENDING
+```
+
+The next scheduler cycle may try again.
+
+## Delivery semantics: at-least-once
+
+v0.6 deliberately provides **at-least-once publication**, not exactly-once delivery.
+
+There is an unavoidable crash window:
+
+```text
+Kafka ACK
+↓
+process crashes before PostgreSQL commits PUBLISHED
+↓
+row remains PENDING
+↓
+event may be sent again
+```
+
+That duplicate possibility is part of the documented contract.
+
+Consumers should eventually deduplicate using `eventId` when consumer-side processing is introduced.
+
+## Scheduler and retry behavior
+
+Production defaults:
+
+```yaml
+corebank:
+  outbox:
+    batch-size: 100
+    fixed-delay-ms: 2000
+```
+
+The publisher processes at most `batch-size` successful events per cycle.
+
+If one event fails to publish, the current batch stops immediately so the same oldest failed event is not retried repeatedly in one scheduler cycle.
+
+The next scheduled cycle performs the next retry.
+
+v0.6 intentionally has no:
+
+```text
+FAILED status
+retry counter
+exponential backoff
+maximum attempt count
+DLQ
+```
+
+Those concerns belong to **v0.7 — Retry + DLQ**.
+
+## Kafka unavailable
+
+A valid banking operation does not fail merely because Kafka is unavailable.
+
+Example:
+
+```text
+Kafka offline
+↓
+POST deposit
+↓
+financial PostgreSQL transaction commits
+outbox row commits as PENDING
+HTTP 201 Created
+```
+
+When Kafka becomes available again:
+
+```text
+scheduler finds PENDING
+↓
+publisher sends event
+↓
+Kafka ACK
+↓
+PUBLISHED
+```
+
+## Interaction with HTTP idempotency
+
+Financial POST endpoints still require `Idempotency-Key`:
 
 ```http
 POST /api/v1/accounts/{accountId}/deposits
 POST /api/v1/accounts/{accountId}/withdrawals
-```
-
-Both require `Idempotency-Key`.
-
-### Transaction history
-
-```http
-GET /api/v1/accounts/{accountId}/transactions
-```
-
-### Transfers
-
-```http
 POST /api/v1/transfers
 ```
 
-Requires `Idempotency-Key`.
+A first successful execution creates the financial records and exactly one outbox event.
 
-### Reconciliation
+An exact semantic replay:
 
-```http
-GET /api/v1/reconciliation/accounts/{accountId}
+```text
+Idempotent-Replayed: true
 ```
 
-## Error contract
+returns the persisted HTTP response and does **not** execute the financial command again.
 
-API failures use `application/problem+json`.
+Therefore:
 
-| HTTP | Meaning |
-|---|---|
-| `400` | malformed JSON, invalid amount/input or invalid/missing idempotency key |
-| `404` | customer or account does not exist |
-| `409` | insufficient funds, blocked/closed account, optimistic concurrency conflict or idempotency conflict |
-| `500` | unexpected sanitized server failure |
+```text
+1 real financial operation = 1 outbox event
+```
 
-## Prerequisites
+not:
+
+```text
+1 HTTP attempt = 1 outbox event
+```
+
+## Full rollback boundary
+
+For an idempotent deposit, conceptually:
+
+```text
+BEGIN
+  idempotency IN_PROGRESS
+  update account balance
+  insert account_transaction
+  insert journal
+  insert ledger lines
+  insert outbox event PENDING
+  persist response JSON
+  idempotency COMPLETED
+COMMIT
+```
+
+A failure anywhere before commit rolls back every database effect, including the outbox row.
+
+## Local environment
+
+Prerequisites:
 
 - Java 21
 - Maven 3.9+
 - Docker + Docker Compose
 
-## Local setup
+Start PostgreSQL and Kafka:
 
 ```bash
-cp .env.example .env
-docker compose up -d postgres
+docker compose up -d postgres kafka
+```
+
+Check services:
+
+```bash
+docker compose ps
+```
+
+Run CoreBank:
+
+```bash
 mvn spring-boot:run
 ```
+
+Defaults:
+
+```text
+PostgreSQL: localhost:5432
+Kafka:      localhost:9092
+API:        localhost:8080
+```
+
+Kafka uses the official JVM image:
+
+```text
+apache/kafka:3.8.1
+```
+
+and runs as a single combined broker/controller KRaft node for local development.
+
+## Configuration
+
+```yaml
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+corebank:
+  kafka:
+    topic:
+      financial-events: corebank.financial-events.v1
+  outbox:
+    batch-size: 100
+    fixed-delay-ms: 2000
+```
+
+## API documentation
 
 Swagger UI:
 
 ```text
 http://localhost:8080/swagger-ui.html
+```
+
+OpenAPI:
+
+```text
+http://localhost:8080/v3/api-docs
 ```
 
 Health:
@@ -344,31 +553,39 @@ Health:
 http://localhost:8080/actuator/health
 ```
 
+Info:
+
+```text
+http://localhost:8080/actuator/info
+```
+
 ## Verification
 
-Full regression gate:
+Full release gate:
 
 ```bash
 mvn clean verify
 ```
 
-Important v0.5 coverage includes:
+Important v0.6 suites include:
 
 ```text
-IdempotencyRecordTest
-IdempotencyKeyValidatorTest
-RequestFingerprintTest
-IdempotencyServiceTest
-IdempotencyMigrationIT
-IdempotencyPersistenceIT
-IdempotencyConcurrencyIT
-MoneyMovementIdempotencyIT
-TransferIdempotencyIT
-IdempotencyRollbackIT
-ConcurrentIdempotentRequestIT
+OutboxEventTest
+FinancialEventFactoryTest
+KafkaTopicConfigTest
+OutboxPublisherTest
+OutboxMigrationIT
+OutboxPersistenceIT
+FinancialOutboxIT
+OutboxIdempotencyIT
+OutboxRollbackIT
+OutboxPublicationWorkerIT
+OutboxConcurrencyIT
+OutboxKafkaIT
+OutboxKafkaFailureIT
 ```
 
-PostgreSQL integration tests use Testcontainers.
+Integration tests use Testcontainers for real PostgreSQL and Kafka where appropriate.
 
 JaCoCo report:
 
@@ -384,7 +601,10 @@ V2__create_account_transactions.sql
 V3__add_transfer_metadata.sql
 V4__create_double_entry_ledger.sql
 V5__create_idempotency_records.sql
+V6__create_outbox_events.sql
 ```
+
+Flyway owns schema evolution; Hibernate uses schema validation.
 
 ## Roadmap
 
@@ -394,8 +614,8 @@ V5__create_idempotency_records.sql
 | v0.2 | Deposits + Withdrawals + Transaction History |
 | v0.3 | Account-to-account Transfers |
 | v0.4 | Double-entry Ledger + Reconciliation |
-| **v0.5** | **Persistent HTTP Idempotency** |
-| v0.6 | Kafka events |
+| v0.5 | Idempotency |
+| **v0.6** | **Kafka Events + Transactional Outbox** |
 | v0.7 | Retry + DLQ |
 | v0.8 | Redis |
 | v0.9 | JWT + RBAC |
@@ -404,19 +624,8 @@ V5__create_idempotency_records.sql
 | v1.2 | AWS deployment |
 | v2.0 | Service extraction / microservices |
 
-## v0.5 boundaries
-
-Explicitly out of scope:
-
-- Redis idempotency cache;
-- TTL / key expiration;
-- scheduled cleanup;
-- Kafka;
-- JWT/client-scoped key namespaces;
-- idempotency for customer or account creation.
-
-These are intentionally deferred to later releases.
-
 ## Why this project exists
 
-CoreBank is a portfolio project focused on engineering decisions behind transactional backend systems: business invariants, database guarantees, ACID boundaries, accounting consistency, idempotent APIs, concurrency control, auditability, reconciliation and a deliberate path toward event-driven architecture.
+CoreBank is a portfolio project focused on engineering decisions behind transactional backend systems: business invariants, ACID boundaries, database guarantees, optimistic concurrency, accounting consistency, append-only audit data, idempotency and reliable asynchronous integration.
+
+The objective is not to simulate every banking feature at once. Each release introduces one class of production concern and makes its guarantees explicit, testable and explainable in code review or technical interviews.
