@@ -3,6 +3,8 @@ package com.corebank.transfer.application;
 import com.corebank.account.domain.Account;
 import com.corebank.account.domain.AccountStatus;
 import com.corebank.account.infrastructure.AccountRepository;
+import com.corebank.event.application.FinancialEventFactory;
+import com.corebank.event.application.OutboxService;
 import com.corebank.ledger.application.LedgerService;
 import com.corebank.shared.exception.InsufficientBalanceException;
 import com.corebank.shared.exception.InvalidAccountStateException;
@@ -37,6 +39,8 @@ class TransferServiceTest {
     @Mock AccountRepository accountRepository;
     @Mock AccountTransactionRepository transactionRepository;
     @Mock LedgerService ledgerService;
+    @Mock FinancialEventFactory eventFactory;
+    @Mock OutboxService outboxService;
 
     @Test
     void transfer_shouldMoveMoneyCreateCorrelatedHistoryAndPostLedgerWithSameTransferId() {
@@ -169,7 +173,12 @@ class TransferServiceTest {
     }
 
     private TransferService service() {
-        return new TransferService(accountRepository, transactionRepository, ledgerService);
+        return new TransferService(
+                accountRepository,
+                transactionRepository,
+                ledgerService,
+                eventFactory,
+                outboxService);
     }
 
     private Account account(UUID id, String number, String balance) {
