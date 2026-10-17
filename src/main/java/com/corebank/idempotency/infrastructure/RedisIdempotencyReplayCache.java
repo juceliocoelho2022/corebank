@@ -40,7 +40,7 @@ public class RedisIdempotencyReplayCache implements IdempotencyReplayCache {
         }
         try {
             return Optional.of(mapper.readValue(json, ReplayPointer.class));
-        } catch (JsonProcessingException | IllegalArgumentException ex) {
+        } catch (JsonProcessingException | RuntimeException ex) {
             degraded("DESERIALIZE", ex);
             evict(idempotencyKey);
             return Optional.empty();
