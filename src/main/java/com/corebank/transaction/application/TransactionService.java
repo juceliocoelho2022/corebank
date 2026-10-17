@@ -2,6 +2,7 @@ package com.corebank.transaction.application;
 
 import com.corebank.account.domain.Account;
 import com.corebank.account.infrastructure.AccountRepository;
+import com.corebank.ledger.application.LedgerService;
 import com.corebank.shared.exception.ResourceNotFoundException;
 import com.corebank.transaction.domain.AccountTransaction;
 import com.corebank.transaction.domain.TransactionType;
@@ -18,10 +19,14 @@ public class TransactionService {
 
     private final AccountRepository accountRepository;
     private final AccountTransactionRepository transactionRepository;
+    private final LedgerService ledgerService;
 
-    public TransactionService(AccountRepository accountRepository, AccountTransactionRepository transactionRepository) {
+    public TransactionService(AccountRepository accountRepository,
+                              AccountTransactionRepository transactionRepository,
+                              LedgerService ledgerService) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
+        this.ledgerService = ledgerService;
     }
 
     @Transactional
@@ -29,8 +34,15 @@ public class TransactionService {
         Account account = getAccount(accountId);
         BigDecimal before = account.deposit(amount);
         accountRepository.saveAndFlush(account);
-        AccountTransaction transaction = new AccountTransaction(accountId, TransactionType.DEPOSIT, amount, before, account.getBalance(), description);
-        return transactionRepository.save(transaction);
+
+        AccountTransaction transaction = new AccountTransaction(
+                accountId, TransactionType.DEPOSIT, amount, before, account.getBalance(), description);
+        AccountTransaction persisted = transactionRepository.saveAndFlush(transaction);
+
+        ledgerService.postDeposit(
+                accountId, persisted.getId(), persisted.getAmount(), persisted.getDescription());
+
+        return persisted;
     }
 
     @Transactional
@@ -38,17 +50,27 @@ public class TransactionService {
         Account account = getAccount(accountId);
         BigDecimal before = account.withdraw(amount);
         accountRepository.saveAndFlush(account);
-        AccountTransaction transaction = new AccountTransaction(accountId, TransactionType.WITHDRAWAL, amount, before, account.getBalance(), description);
-        return transactionRepository.save(transaction);
+
+        AccountTransaction transaction = new AccountTransaction(
+                accountId, TransactionType.WITHDRAWAL, amount, before, account.getBalance(), description);
+        AccountTransaction persisted = transactionRepository.saveAndFlush(transaction);
+
+        ledgerService.postWithdrawal(
+                accountId, persisted.getId(), persisted.getAmount(), persisted.getDescription());
+
+        return persisted;
     }
 
     @Transactional(readOnly = true)
     public List<AccountTransaction> listByAccount(UUID accountId) {
-        if (!accountRepository.existsById(accountId)) throw new ResourceNotFoundException("Account not found");
+        if (!accountRepository.existsById(accountId)) {
+            throw new ResourceNotFoundException("Account not found");
+        }
         return transactionRepository.findByAccountIdOrderByCreatedAtDesc(accountId);
     }
 
     private Account getAccount(UUID accountId) {
-        return accountRepository.findById(accountId).orElseThrow(() -> new ResourceNotFoundException("Account not found"));
+        return accountRepository.findById(accountId)
+                .orElseThrow(() -> new ResourceNotFoundException("Account not found"));
     }
 }
