@@ -52,9 +52,6 @@ class TransferLedgerIT {
     void setUp() {
         jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_test_fail_transfer_journal ON journal_entries");
         jdbcTemplate.execute("DROP FUNCTION IF EXISTS fail_transfer_journal_insert()");
-        transactionRepository.deleteAll();
-        accountRepository.deleteAll();
-        customerRepository.deleteAll();
 
         Customer customer = customerRepository.saveAndFlush(new Customer(
                 "Ana Silva", UUID.randomUUID().toString(), "ana." + UUID.randomUUID() + "@example.com"));
