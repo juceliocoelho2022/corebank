@@ -14,8 +14,8 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
             FROM outbox_events
             WHERE status = 'PENDING'
             ORDER BY created_at
-            FOR UPDATE SKIP LOCKED
             LIMIT 1
+            FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
     Optional<OutboxEvent> findNextPendingForUpdate();
 }
