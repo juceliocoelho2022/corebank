@@ -1,6 +1,7 @@
 package com.corebank.customer.web;
 
 import com.corebank.customer.application.CustomerService;
+import com.corebank.customer.application.CustomerSummaryService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,9 +19,11 @@ import java.util.UUID;
 public class CustomerController {
 
     private final CustomerService service;
+    private final CustomerSummaryService summaryService;
 
-    public CustomerController(CustomerService service) {
+    public CustomerController(CustomerService service, CustomerSummaryService summaryService) {
         this.service = service;
+        this.summaryService = summaryService;
     }
 
     @PostMapping
@@ -34,4 +37,10 @@ public class CustomerController {
     public CustomerResponse get(@PathVariable UUID id) {
         return CustomerResponse.from(service.get(id));
     }
+
+    @GetMapping("/{id}/summary")
+    public CustomerSummaryResponse summary(@PathVariable UUID id) {
+        return CustomerSummaryResponse.from(summaryService.get(id));
+    }
 }
+
