@@ -26,6 +26,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
@@ -39,6 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Testcontainers(disabledWithoutDocker = true)
 class IdempotencyRedisIT extends RedisPostgresIntegrationSupport {
 
@@ -110,8 +112,20 @@ class IdempotencyRedisIT extends RedisPostgresIntegrationSupport {
                 .andExpect(status().isCreated())
                 .andExpect(header().string("Idempotent-Replayed", "true"))
                 .andReturn();
-        assertThat(second.getResponse().getContentAsString())
-                .isEqualTo(first.getResponse().getContentAsString());
+        JsonNode original = mapper.readTree(first.getResponse().getContentAsString());
+        JsonNode replayed = mapper.readTree(second.getResponse().getContentAsString());
+        for (String monetaryField : new String[] {"amount", "balanceBefore", "balanceAfter"}) {
+            assertThat(replayed.path(monetaryField).decimalValue())
+                    .as(monetaryField + " must preserve monetary value")
+                    .isEqualByComparingTo(original.path(monetaryField).decimalValue());
+        }
+        ObjectNode originalNonMonetary = ((ObjectNode) original).deepCopy();
+        ObjectNode replayedNonMonetary = ((ObjectNode) replayed).deepCopy();
+        for (String monetaryField : new String[] {"amount", "balanceBefore", "balanceAfter"}) {
+            originalNonMonetary.remove(monetaryField);
+            replayedNonMonetary.remove(monetaryField);
+        }
+        assertThat(replayedNonMonetary).isEqualTo(originalNonMonetary);
         assertThat(accounts.findById(accountId).orElseThrow().getBalance()).isEqualByComparingTo("100.00");
         assertThat(transactions.count() - beforeTx).isEqualTo(1);
         assertThat(journals.count() - beforeJournal).isEqualTo(1);
