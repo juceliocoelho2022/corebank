@@ -1,6 +1,7 @@
 package com.corebank.account.web;
 
 import com.corebank.account.application.AccountService;
+import com.corebank.account.application.AccountSummaryService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,9 +19,11 @@ import java.util.UUID;
 public class AccountController {
 
     private final AccountService service;
+    private final AccountSummaryService summaryService;
 
-    public AccountController(AccountService service) {
+    public AccountController(AccountService service, AccountSummaryService summaryService) {
         this.service = service;
+        this.summaryService = summaryService;
     }
 
     @PostMapping
@@ -38,4 +41,10 @@ public class AccountController {
     public BalanceResponse getBalance(@PathVariable UUID id) {
         return BalanceResponse.from(service.get(id));
     }
+
+    @GetMapping("/{id}/summary")
+    public AccountSummaryResponse summary(@PathVariable UUID id) {
+        return AccountSummaryResponse.from(summaryService.get(id));
+    }
 }
+

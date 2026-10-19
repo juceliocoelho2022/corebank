@@ -1,6 +1,10 @@
 package com.corebank.account.web;
 
 import com.corebank.account.application.AccountService;
+import com.corebank.account.application.AccountSummary;
+import com.corebank.account.application.AccountSummaryService;
+import com.corebank.account.domain.AccountStatus;
+import java.time.Instant;
 import com.corebank.account.domain.Account;
 import com.corebank.shared.exception.ApiExceptionHandler;
 import com.corebank.shared.exception.ResourceNotFoundException;
@@ -31,6 +35,9 @@ class AccountControllerTest {
 
     @MockitoBean
     AccountService service;
+
+    @MockitoBean
+    AccountSummaryService summaryService;
 
     @Test
     void createsAccount() throws Exception {
@@ -128,6 +135,24 @@ class AccountControllerTest {
         mvc.perform(get("/api/v1/accounts/{id}", accountId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("Account not found"));
+    }
+
+
+    @Test
+    void getsAccountSummaryWithoutBalance() throws Exception {
+        UUID id = UUID.randomUUID();
+        UUID customerId = UUID.randomUUID();
+        when(summaryService.get(id)).thenReturn(new AccountSummary(id, customerId,
+                "0001", "10000001", AccountStatus.ACTIVE, "BRL", Instant.parse("2026-10-17T12:00:00Z")));
+
+        mvc.perform(get("/api/v1/accounts/{id}/summary", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id.toString()))
+                .andExpect(jsonPath("$.customerId").value(customerId.toString()))
+                .andExpect(jsonPath("$.currency").value("BRL"))
+                .andExpect(jsonPath("$.balance").doesNotExist())
+                .andExpect(jsonPath("$.version").doesNotExist())
+                .andExpect(jsonPath("$.updatedAt").doesNotExist());
     }
 
     private static void forceId(Account account, UUID id) throws Exception {

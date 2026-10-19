@@ -12,7 +12,7 @@ public class OpenApiConfig {
     OpenAPI coreBankOpenApi() {
         return new OpenAPI().info(new Info()
                 .title("CoreBank API")
-                .version("0.1.0")
+                .version("0.8.0")
                 .description("Banking as a Service portfolio backend"));
     }
 }

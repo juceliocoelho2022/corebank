@@ -1,6 +1,9 @@
 package com.corebank.customer.web;
 
 import com.corebank.customer.application.CustomerService;
+import com.corebank.customer.application.CustomerSummary;
+import com.corebank.customer.application.CustomerSummaryService;
+import java.time.Instant;
 import com.corebank.customer.domain.Customer;
 import com.corebank.shared.exception.ApiExceptionHandler;
 import com.corebank.shared.exception.ConflictException;
@@ -33,6 +36,9 @@ class CustomerControllerTest {
 
     @MockitoBean
     CustomerService service;
+
+    @MockitoBean
+    CustomerSummaryService summaryService;
 
     @Test
     void createsCustomer() throws Exception {
@@ -105,6 +111,21 @@ class CustomerControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.detail").value("Invalid value for parameter 'id'"));
+    }
+
+
+    @Test
+    void getsSafeCustomerSummaryWithoutPii() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(summaryService.get(id)).thenReturn(
+                new CustomerSummary(id, "Ana Silva", Instant.parse("2026-10-17T12:00:00Z")));
+
+        mvc.perform(get("/api/v1/customers/{id}/summary", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id.toString()))
+                .andExpect(jsonPath("$.name").value("Ana Silva"))
+                .andExpect(jsonPath("$.document").doesNotExist())
+                .andExpect(jsonPath("$.email").doesNotExist());
     }
 
     private static void forceId(Customer customer, UUID id) throws Exception {
