@@ -40,10 +40,13 @@ class IdempotencyServiceTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private IdempotencyService service;
+    @Mock IdempotencyMetrics metrics;
 
     @BeforeEach
     void setUp() {
-        service = new IdempotencyService(repository, lockRepository, objectMapper, replayCache, events);
+        service = new IdempotencyService(
+                repository, lockRepository, objectMapper,
+                replayCache, events, metrics);
     }
 
     @Test
@@ -94,6 +97,7 @@ class IdempotencyServiceTest {
 
         assertThat(result.body()).isEqualTo(response);
         assertThat(result.replayed()).isTrue();
+        verify(metrics).replayed();
         assertThat(executions).hasValue(0);
         verify(lockRepository, never()).tryLock(any());
     }
@@ -141,6 +145,7 @@ class IdempotencyServiceTest {
                 () -> null))
                 .isInstanceOf(ConflictException.class)
                 .hasMessageContaining("already in progress");
+        verify(metrics).conflict();
     }
 
 

@@ -26,18 +26,21 @@ public class IdempotencyService {
     private final ObjectMapper objectMapper;
     private final IdempotencyReplayCache replayCache;
     private final ApplicationEventPublisher events;
+    private final IdempotencyMetrics metrics;
 
     public IdempotencyService(
             IdempotencyRecordRepository repository,
             IdempotencyLockRepository lockRepository,
             ObjectMapper objectMapper,
             IdempotencyReplayCache replayCache,
-            ApplicationEventPublisher events) {
+            ApplicationEventPublisher events,
+            IdempotencyMetrics metrics) {
         this.repository = repository;
         this.lockRepository = lockRepository;
         this.objectMapper = objectMapper;
         this.replayCache = replayCache;
         this.events = events;
+        this.metrics = metrics;
     }
 
     @Transactional
@@ -66,6 +69,7 @@ public class IdempotencyService {
         }
 
         if (!lockRepository.tryLock(key)) {
+            metrics.conflict();
             throw new ConflictException("A request with this Idempotency-Key is already in progress");
         }
 
@@ -126,14 +130,17 @@ public class IdempotencyService {
             Class<T> responseType) {
 
         if (record.getOperationType() != operation || !record.getRequestHash().equals(requestHash)) {
+            metrics.conflict();
             throw new ConflictException("Idempotency-Key was already used with a different operation or request payload");
         }
 
         if (record.getStatus() == IdempotencyStatus.IN_PROGRESS) {
+            metrics.conflict();
             throw new ConflictException("A request with this Idempotency-Key is already in progress");
         }
 
         T body = objectMapper.convertValue(record.getResponseBody(), responseType);
+        metrics.replayed();
         return new IdempotencyExecution<>(body, record.getHttpStatus(), true);
     }
 }
