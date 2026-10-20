@@ -11,6 +11,7 @@ import com.corebank.shared.exception.ResourceNotFoundException;
 import com.corebank.transaction.domain.AccountTransaction;
 import com.corebank.transaction.domain.TransactionType;
 import com.corebank.transaction.infrastructure.AccountTransactionRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,18 +28,21 @@ public class TransferService {
     private final LedgerService ledgerService;
     private final FinancialEventFactory eventFactory;
     private final OutboxService outboxService;
+    private final ApplicationEventPublisher events;
 
     public TransferService(
             AccountRepository accountRepository,
             AccountTransactionRepository transactionRepository,
             LedgerService ledgerService,
             FinancialEventFactory eventFactory,
-            OutboxService outboxService) {
+            OutboxService outboxService,
+            ApplicationEventPublisher events) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
         this.ledgerService = ledgerService;
         this.eventFactory = eventFactory;
         this.outboxService = outboxService;
+        this.events = events;
     }
 
     @Transactional
@@ -87,6 +91,8 @@ public class TransferService {
                 sourceAccountId,
                 destinationAccountId,
                 normalizedAmount));
+
+        events.publishEvent(new TransferCommittedEvent());
 
         return new TransferResult(
                 transferId,
