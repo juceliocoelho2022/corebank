@@ -41,6 +41,7 @@ class TransferServiceTest {
     @Mock LedgerService ledgerService;
     @Mock FinancialEventFactory eventFactory;
     @Mock OutboxService outboxService;
+    @Mock org.springframework.context.ApplicationEventPublisher events;
 
     @Test
     void transfer_shouldMoveMoneyCreateCorrelatedHistoryAndPostLedgerWithSameTransferId() {
@@ -61,6 +62,7 @@ class TransferServiceTest {
         assertThat(result.sourceBalanceAfter()).isEqualByComparingTo("70.00");
         assertThat(result.destinationBalanceAfter()).isEqualByComparingTo("50.00");
         assertThat(result.transferId()).isNotNull();
+        verify(events).publishEvent(any(TransferCommittedEvent.class));
 
         ArgumentCaptor<AccountTransaction> captor = ArgumentCaptor.forClass(AccountTransaction.class);
         verify(transactionRepository, org.mockito.Mockito.times(2)).save(captor.capture());
@@ -178,7 +180,8 @@ class TransferServiceTest {
                 transactionRepository,
                 ledgerService,
                 eventFactory,
-                outboxService);
+                outboxService,
+                events);
     }
 
     private Account account(UUID id, String number, String balance) {

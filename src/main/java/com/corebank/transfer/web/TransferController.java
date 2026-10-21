@@ -7,6 +7,7 @@ import com.corebank.idempotency.application.IdempotencyService;
 import com.corebank.idempotency.application.RequestFingerprint;
 import com.corebank.idempotency.domain.IdempotencyOperation;
 import com.corebank.transfer.application.TransferService;
+import com.corebank.transfer.application.TransferMetricsExecutor;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,6 +25,7 @@ public class TransferController {
     private static final String REPLAY_HEADER = "Idempotent-Replayed";
 
     private final TransferService service;
+    private final TransferMetricsExecutor metricsExecutor;
     private final IdempotencyKeyValidator keyValidator;
     private final RequestFingerprint fingerprint;
     private final IdempotencyService idempotencyService;
@@ -32,11 +34,13 @@ public class TransferController {
             TransferService service,
             IdempotencyKeyValidator keyValidator,
             RequestFingerprint fingerprint,
-            IdempotencyService idempotencyService) {
+            IdempotencyService idempotencyService,
+            TransferMetricsExecutor metricsExecutor) {
         this.service = service;
         this.keyValidator = keyValidator;
         this.fingerprint = fingerprint;
         this.idempotencyService = idempotencyService;
+        this.metricsExecutor = metricsExecutor;
     }
 
     @PostMapping
@@ -57,11 +61,11 @@ public class TransferController {
                 requestHash,
                 TransferResponse.class,
                 () -> {
-                    TransferResponse response = TransferResponse.from(service.transfer(
+                    TransferResponse response = TransferResponse.from(metricsExecutor.execute(() -> service.transfer(
                             request.sourceAccountId(),
                             request.destinationAccountId(),
                             request.amount(),
-                            request.description()));
+                            request.description())));
                     return new IdempotencyCommandResult<>(response.transferId(), HttpStatus.CREATED.value(), response);
                 });
 
