@@ -11,6 +11,11 @@ import com.corebank.shared.exception.InsufficientBalanceException;
 import com.corebank.shared.exception.ResourceNotFoundException;
 import com.corebank.transfer.application.TransferResult;
 import com.corebank.transfer.application.TransferService;
+import com.corebank.transfer.application.TransferMetrics;
+import com.corebank.transfer.application.TransferMetricsExecutor;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,9 +42,27 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(TransferController.class)
-@Import({ApiExceptionHandler.class, IdempotencyKeyValidator.class, RequestFingerprint.class})
+@Import({ApiExceptionHandler.class, IdempotencyKeyValidator.class, RequestFingerprint.class, TransferControllerTest.MetricsConfig.class})
 class TransferControllerTest {
 
+    @TestConfiguration(proxyBeanMethods = false)
+    static class MetricsConfig {
+
+        @Bean
+        SimpleMeterRegistry transferTestRegistry() {
+            return new SimpleMeterRegistry();
+        }
+
+        @Bean
+        TransferMetrics transferMetrics(SimpleMeterRegistry registry) {
+            return new TransferMetrics(registry);
+        }
+
+        @Bean
+        TransferMetricsExecutor transferMetricsExecutor(TransferMetrics metrics) {
+            return new TransferMetricsExecutor(metrics);
+        }
+    }
     @Autowired MockMvc mvc;
     @MockitoBean TransferService service;
     @MockitoBean IdempotencyService idempotencyService;
@@ -163,6 +186,41 @@ class TransferControllerTest {
                 .andExpect(status().isConflict());
     }
 
+    @Test
+    void replay_shouldNotExecuteTransferOrRecordDuration() throws Exception {
+        UUID transferId = UUID.randomUUID();
+        UUID sourceId = UUID.randomUUID();
+        UUID destinationId = UUID.randomUUID();
+
+        TransferResponse response = TransferResponse.from(
+                new TransferResult(
+                        transferId, sourceId, destinationId,
+                        new BigDecimal("10.00"),
+                        new BigDecimal("90.00"),
+                        new BigDecimal("10.00"),
+                        Instant.parse("2026-10-20T12:00:00Z")));
+
+        org.mockito.Mockito.reset(idempotencyService);
+
+        when(idempotencyService.execute(
+                anyString(),
+                any(IdempotencyOperation.class),
+                anyString(),
+                eq(TransferResponse.class),
+                any()))
+                .thenReturn(new IdempotencyExecution<>(response, 201, true));
+
+        mvc.perform(post("/api/v1/transfers")
+                        .header("Idempotency-Key", "transfer-replay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"sourceAccountId":"%s","destinationAccountId":"%s","amount":10.00}
+                                """.formatted(sourceId, destinationId)))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotent-Replayed", "true"));
+
+        org.mockito.Mockito.verifyNoInteractions(service);
+    }
     @Test
     void malformedJson_shouldReturn400() throws Exception {
         mvc.perform(post("/api/v1/transfers")
