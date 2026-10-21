@@ -43,7 +43,7 @@ class TransferMetricsExecutorTest {
             })).isSameAs(original);
 
             assertThat(registry.get("corebank.transfer.rejections")
-                    
+
                     .tag("reason", "account_not_found")
                     .counter().count()).isEqualTo(1.0);
 

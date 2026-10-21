@@ -18,7 +18,7 @@ class TransferMetricsTest {
             metrics.rejected("insufficient_balance");
 
             double count = registry.get("corebank.transfer.rejections")
-                    
+
                     .tag("reason", "insufficient_balance")
                     .counter()
                     .count();
